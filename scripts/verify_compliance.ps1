@@ -151,6 +151,35 @@ if ((Test-Path $matrixPath) -and (Test-Path $llrPath)) {
     }
 }
 
+# Deviation / defensive log <-> source tags, and no line-number refs
+$logPath = Join-Path $Root "docs\DEVIATION_AND_DEFENSIVE_LOG.md"
+if (Test-Path $logPath) {
+    $logText = [System.IO.File]::ReadAllText($logPath)
+    $idPattern = '\b(?:DEV|DEF)-(?:QSPI|AD7490)-\d{3}\b'
+    $logIds = @([regex]::Matches($logText, $idPattern) | ForEach-Object { $_.Value } | Select-Object -Unique)
+
+    $codeIds = @()
+    foreach ($rel in $ProdFiles) {
+        $txt = [System.IO.File]::ReadAllText((Join-Path $Root $rel))
+        $codeIds += @([regex]::Matches($txt, $idPattern) | ForEach-Object { $_.Value })
+    }
+    $codeIds = @($codeIds | Select-Object -Unique)
+
+    foreach ($id in $logIds) {
+        if ($id -notin $codeIds) { $Errors.Add("Log entry $id is not named in any production source comment") }
+    }
+    foreach ($id in $codeIds) {
+        if ($id -notin $logIds) { $Errors.Add("Source comment names $id, which has no entry in DEVIATION_AND_DEFENSIVE_LOG.md") }
+    }
+
+    $logLines = [System.IO.File]::ReadAllLines($logPath)
+    for ($i = 0; $i -lt $logLines.Count; $i++) {
+        foreach ($m in [regex]::Matches($logLines[$i], '[A-Za-z0-9_]+\.[ch]:\d+')) {
+            $Errors.Add("DEVIATION_AND_DEFENSIVE_LOG.md:$($i + 1): line-number reference '$($m.Value)'; name the function or field instead")
+        }
+    }
+}
+
 if ($Errors.Count -gt 0) {
     Write-Output "COMPLIANCE AUDIT FAILED ($($Errors.Count) issue(s)):"
     foreach ($e in $Errors) { Write-Output "  - $e" }
@@ -165,6 +194,8 @@ Write-Output "  - Rule 0 formatting         : PASS (<= 80 cols, Allman, no //)"
 Write-Output "  - Rule 2 naming             : PASS (3..31 chars, no vague stems)"
 Write-Output "  - Rule 4 function metrics   : PASS (<= 100 lines, 1 return)"
 Write-Output "  - Rule 9 SEU Hamming dist   : PASS (HD >= 12..32)"
+Write-Output "  - Deviation / defensive log : PASS (IDs tagged in source,"
+Write-Output "                                no line-number references)"
 Write-Output "  - DO-178C Traceability      : PASS (100% bi-directional match)"
 Write-Output "================================================================"
 exit 0

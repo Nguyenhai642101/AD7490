@@ -61,7 +61,7 @@ flowchart TD
 
 ### 2.2 Public Operations (`SDD-QSPI-2.1` .. `2.4`)
 - **`SDD-QSPI-2.1` (`qspi_hal_init`)**: Validates `p_cfg` (`SDD-QSPI-3.3`), triggers the `16-ACLK` software reset (`SRR = 0x0000000AU`), waits 32 AXI reads (`SDD-QSPI-3.9`), verifies `SPICR == 0x00000180U`, disables IP interrupts (`GIER = 0U`), drives `SS0` high (`SPISSR = 0xFFFFFFFFU`), resets TX/RX FIFOs while Master Inhibit is set, writes the idle control word, and verifies `SPISR.MODF == 0`.
-- **`SDD-QSPI-2.2` (`qspi_hal_transceive_bytes`)**: Validates configuration, byte count (`1..256`), and non-`NULL` TX/RX pointers; flushes FIFOs (`SDD-QSPI-3.6`); queues `p_tx_bytes` (`SDD-QSPI-3.10`); executes the bus cycle (`SDD-QSPI-3.7`); and drains `byte_count` received bytes (`SDD-QSPI-3.8`) only on `QSPI_HAL_OK`.
+- **`SDD-QSPI-2.2` (`qspi_hal_transceive_bytes`)**: Validates configuration, byte count (`1..256`), and non-`NULL` TX/RX pointers; flushes FIFOs (`SDD-QSPI-3.6`); queues `p_tx_bytes` (`SDD-QSPI-3.10`); executes the bus cycle (`SDD-QSPI-3.7`); and drains `byte_count` received bytes (`SDD-QSPI-3.8`) only if the bus cycle returned `QSPI_HAL_OK`. The drain writes `p_rx_bytes` in place and does not buffer the frame, so a drain aborted by `QSPI_HAL_ERR_HW` leaves a partially written array: `p_rx_bytes` is valid only when the function itself returns `QSPI_HAL_OK`, and the caller (`txrx_frame`, `read_frame`, `SDD-AD7490-3.4`, `3.5`) deserialises it on that condition only. Buffering the frame to roll a partial drain back would need a 256-byte local array, which `Rule §8` forbids on the stack (`> 64 B`), so the contract is stated instead of rolled back.
 - **`SDD-QSPI-2.3` (`qspi_hal_write_bytes`)**: Same as `SDD-QSPI-2.2` without draining the RX FIFO (received bytes are discarded by the FIFO reset at the start of the next transaction).
 - **`SDD-QSPI-2.4` (`qspi_hal_read_bytes`)**: Same as `SDD-QSPI-2.2`, using `load_tx_fifo_fill()` (`SDD-QSPI-3.11`) to drive `dummy_tx_byte` repeatedly on MOSI.
 
@@ -101,17 +101,20 @@ stateDiagram-v2
     FAULT --> READY : ad7490_init() == AD7490_OK
 ```
 
-### 3.2 Device Lifecycle, Single Read & Power Modes (`SDD-AD7490-2.1` .. `2.10`)
+### 3.2 Device Lifecycle, Single Read & Power Modes (`SDD-AD7490-2.1` .. `2.12`)
 - **`SDD-AD7490-2.1`, `2.6`, `2.7` (`ad7490_init`, `is_dev_cfg_ok`, `run_power_up`)**:
   - Pessimistically sets `p_dev->state = AD7490_STATE_FAULT` upon entry.
   - Validates `vref_mv` (`2475..2525 mV`), `clock_mode == QSPI_CLOCK_MODE_2` (`CPOL=1, CPHA=0`), `poll_timeout_us >= 3U` ($16 \times 160\text{ ns} = 2.56\text{ }\mu\text{s}$), and `ctrl_cfg` before touching the QSPI peripheral.
   - Executes the datasheet Figure 16 power-up sequence: QSPI IP reset + 2 dummy frames with `DIN = 0xFFFFU` + 1 Control Register configuration frame.
 - **`SDD-AD7490-2.2`, `2.8`, `2.9` (`ad7490_read_channel`, `read_single`, `decode_sample`)**:
   - **1-Frame Conversion Pipeline:** The AD7490 samples and converts in Frame $N$ the channel selected by `ADD3..ADD0` at the end of Frame $N-1$.
-  - Therefore, `read_single()` transmits **2 frames**:
-    1. Frame 1 (`write_frame`): Writes the CR with `ADD3..ADD0 = channel_id` (also serving as the wakeup conversion if the ADC was in `AUTO_STANDBY` or `AUTO_SHUTDOWN`); its DOUT is ignored.
-    2. Frame 2 (`txrx_frame`): Re-writes the same CR while clocking out the conversion result for `channel_id`.
+  - Frame 1 (`write_frame`) always writes the CR with `ADD3..ADD0 = channel_id`; its DOUT is ignored. What follows depends on the power mode:
+    - **`NORMAL` (2 frames):** Frame 2 (`txrx_frame`) re-writes the same CR while clocking out the conversion result for `channel_id`.
+    - **`AUTO_STANDBY` / `AUTO_SHUTDOWN` (3 frames, AD7490 Figures 14 and 15):** a CR write with an AUTO `PM1:PM0` makes the part enter its low-power state on the CS rising edge of Frame 1. Frame 2 is therefore the power-up dummy cycle: its DOUT is **INVALID** and the datasheet requires `WRITE = 0` so the CR stays unchanged. Frame 3 (`WRITE = 0`) converts `channel_id` with the part fully powered up. Both frames are sent by `read_after_wakeup()`.
+  - The invalid dummy DOUT may carry correct channel bits, so the channel echo check alone cannot detect a missing dummy frame; the frame count is fixed by design instead.
   - `decode_sample()` verifies `DOUT[15:12] == channel_id` (`AD7490_ERR_CHAN_MISMATCH` on mismatch) before scaling `DOUT[11:0]` to millivolts.
+- **`SDD-AD7490-2.11` (`is_auto_power_mode`)**: returns `true` for `AD7490_POWER_AUTO_STANDBY` and `AD7490_POWER_AUTO_SHUTDOWN`, `false` otherwise (one atomic condition per decision). Selects the 2-frame or 3-frame path in `read_single()` without passing a selector flag to a helper (minimal control coupling, `Rule §3`).
+- **`SDD-AD7490-2.12` (`read_after_wakeup`)**: sends the power-up dummy frame (`read_frame`, `WRITE = 0`, DOUT discarded; $16 \times 160\text{ ns} = 2.56\text{ }\mu\text{s} > t_{12} = 1\text{ }\mu\text{s}$) followed by the result frame (`read_frame`, `WRITE = 0`), and returns the result frame's DOUT only on `AD7490_OK`.
 - **`SDD-AD7490-2.5`, `2.10` (`ad7490_set_power_mode`, `write_power_mode`)**:
   - Writes the updated `PM1:PM0` bits to the Control Register.
   - If the new mode is not `AD7490_POWER_FULL_SHUTDOWN`, clocks one dummy read frame (`WRITE = 0`, duration $2.56\text{ }\mu\text{s} > 1\text{ }\mu\text{s}$ datasheet $t_{\text{POWER-UP}}$) so the analog reference and buffer are settled before the function returns.
@@ -181,7 +184,7 @@ stateDiagram-v2
 | `qspi_hal_init` | `QSPI_RESET_SETTLE_READS = 32` | 38 AXI4-Lite accesses | `0 B` (scalars only) |
 | `qspi_hal_transceive_bytes` | `byte_count <= 256`, poll $\le 100 \times \text{timeout\_us}$ | 1 CS frame (`1..256 B`) | `0 B` (caller buffers) |
 | `ad7490_init` | `AD7490_POWER_UP_DUMMY_FRAMES = 2` | QSPI init + 3 frames (`6 B`) | `2 B` (`frame_bytes_t`) |
-| `ad7490_read_channel` | No loops | 2 frames (`4 B`) | `2 B` (`frame_bytes_t`) |
+| `ad7490_read_channel` | No loops | 2 frames `NORMAL` / 3 frames `AUTO_*` (`4..6 B`) | `2 B` (`frame_bytes_t`) |
 | `ad7490_set_power_mode` | No loops | 1..2 frames (`2..4 B`) | `20 B` (`ad7490_ctrl_cfg_t`) |
 | `ad7490_sequencer_start` | `AD7490_CHANNEL_COUNT = 16` (`mask_to_shadow`) | 3 frames (`6 B`) | `2 B` (`frame_bytes_t`) |
 | `ad7490_sequencer_read_scan` | `channel_total <= 16` (`AD7490_CHANNEL_COUNT`) | $\le 16$ frames ($\le 32\text{ B}$) | `8 B` (`ad7490_dout_t`) |
@@ -190,3 +193,106 @@ stateDiagram-v2
 | `ad7490_monitor_step` (normal) | `16` frames + `16` pushes | $\le 16$ frames | `0 B` (uses `*p_mon`) |
 | `ad7490_monitor_step` (reconfig) | $2 \times (16 \times 16)$ resets + `16` frames | QSPI init + $\le 22$ frames | `0 B` (uses `*p_mon`) |
 | `ad7490_monitor_get_avg` | `fill_count <= 16` (`AD7490_AVG_WINDOW_SIZE`) | 0 bus accesses | `0 B` (scalars only) |
+---
+
+## 6. Design Element Catalogue (one entry per `@design` ID)
+
+Every `@design` tag in `hal/` and `driver/` is listed below exactly once, with the element that carries it, the Low-Level Requirement it implements and its design summary. Summaries are taken from the element's Doxygen `@brief` in the source, so this catalogue and the code describe the same design; sections 2 to 5 give the rationale. Total: **87 design elements**.
+
+### 6.1 AXI Quad SPI HAL (`SDD-QSPI-*`)
+
+| Design ID | Element | Kind | File(s) | Implements | Design summary |
+|:---|:---|:---|:---|:---|:---|
+| `SDD-QSPI-1.0` | `axi_qspi_hal module` | Module (file scope) | `hal/axi_qspi_hal.c`, `hal/axi_qspi_hal.h` | `LLR-QSPI-001` | HAL implementation for Xilinx AXI Quad SPI (8-bit, polled). |
+| `SDD-QSPI-1.1` | `qspi_hal_status_t` | Type | `hal/axi_qspi_hal.h` | `LLR-QSPI-002` | Status codes for AXI Quad SPI HAL operations. |
+| `SDD-QSPI-1.2` | `qspi_clock_mode_t` | Type | `hal/axi_qspi_hal.h` | `LLR-QSPI-003` | SPI clock polarity / phase modes (PG153 SPICR CPOL/CPHA). |
+| `SDD-QSPI-1.3` | `qspi_hal_config_t` | Type | `hal/axi_qspi_hal.h` | `LLR-QSPI-004` | Configuration of one AXI Quad SPI instance. |
+| `SDD-QSPI-1.4` | `ASSERT()` | Macro | `hal/axi_qspi_hal.h` | `LLR-QSPI-005` | Project contract assertion for internal static helpers. |
+| `SDD-QSPI-2.1` | `qspi_hal_init()` | Public function | `hal/axi_qspi_hal.c`, `hal/axi_qspi_hal.h` | `LLR-QSPI-010` | Reset the AXI Quad SPI IP and set 8-bit polled master mode. |
+| `SDD-QSPI-2.2` | `qspi_hal_transceive_bytes()` | Public function | `hal/axi_qspi_hal.c`, `hal/axi_qspi_hal.h` | `LLR-QSPI-011` | Full-duplex transfer of byte_count bytes under one SS0 frame. |
+| `SDD-QSPI-2.3` | `qspi_hal_write_bytes()` | Public function | `hal/axi_qspi_hal.c`, `hal/axi_qspi_hal.h` | `LLR-QSPI-012` | Transmit byte_count bytes under one SS0 frame, ignore MISO. |
+| `SDD-QSPI-2.4` | `qspi_hal_read_bytes()` | Public function | `hal/axi_qspi_hal.c`, `hal/axi_qspi_hal.h` | `LLR-QSPI-013` | Read byte_count bytes while driving dummy_tx_byte on MOSI. |
+| `SDD-QSPI-3.1` | `reg_write32()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-020` | Write a 32-bit word to an AXI Quad SPI register. |
+| `SDD-QSPI-3.2` | `reg_read32()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-021` | Read a 32-bit word from an AXI Quad SPI register. |
+| `SDD-QSPI-3.3` | `is_hal_cfg_ok()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-022` | Check a QSPI HAL configuration against its bounds. |
+| `SDD-QSPI-3.4` | `is_byte_count_ok()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-023` | Check that a byte count fits the 256-byte hardware FIFO. |
+| `SDD-QSPI-3.5` | `clock_mode_ctrl_bits[]`, `build_control_word()` | Data (static const table) + Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-024` | SPICR CPOL/CPHA bits, indexed by qspi_clock_mode_t; Build the SPICR word: enabled master, manual SS, inhibited. |
+| `SDD-QSPI-3.6` | `reset_fifos()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-025` | Flush TX and RX FIFOs while the master stays inhibited. |
+| `SDD-QSPI-3.7` | `run_bus_cycle()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-026` | Assert SS0, clock out the TX FIFO, wait for the last bit. |
+| `SDD-QSPI-3.8` | `drain_rx_bytes()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-027` | Copy byte_count received bytes out of the RX FIFO. |
+| `SDD-QSPI-3.9` | `wait_reset_done()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-028` | Let the SRR reset pulse expire and confirm the reset state. |
+| `SDD-QSPI-3.10` | `load_tx_fifo_array()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-029` | Queue byte_count bytes from p_tx_bytes into the TX FIFO. |
+| `SDD-QSPI-3.11` | `load_tx_fifo_fill()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-030` | Queue fill_byte byte_count times into the TX FIFO. |
+| `SDD-QSPI-3.12` | `read_rx_count()` | Private function | `hal/axi_qspi_hal.c` | `LLR-QSPI-031` | Return how many bytes the RX FIFO currently holds. |
+
+### 6.2 AD7490 Driver and Monitor (`SDD-AD7490-*`)
+
+| Design ID | Element | Kind | File(s) | Implements | Design summary |
+|:---|:---|:---|:---|:---|:---|
+| `SDD-AD7490-1.0` | `ad7490_driver module` | Module (file scope) | `driver/ad7490_driver.c`, `driver/ad7490_driver.h` | `LLR-AD7490-001` | AD7490 driver implementation. |
+| `SDD-AD7490-1.1` | `ad7490_status_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-002` | Status codes of every AD7490 driver function. |
+| `SDD-AD7490-1.2` | `ad7490_power_mode_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-003` | Power management modes (AD7490 Table III, PM1..PM0). |
+| `SDD-AD7490-1.3` | `ad7490_range_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-004` | Analog input range (AD7490 Table I, RANGE bit). |
+| `SDD-AD7490-1.4` | `ad7490_coding_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-005` | Output coding (AD7490 Table I, CODING bit). |
+| `SDD-AD7490-1.5` | `ad7490_dout_mode_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-006` | DOUT state after the 16th SCLK (AD7490 Table I, WEAK/TRI). |
+| `SDD-AD7490-1.6` | `ad7490_config_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-007` | Configuration of one AD7490 device. |
+| `SDD-AD7490-1.7` | `ad7490_sample_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-008` | One conversion result, raw and in physical units. |
+| `SDD-AD7490-1.8` | `ad7490_ctrl_cfg_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-009` | Control Register options that stay fixed for a device. |
+| `SDD-AD7490-1.9` | `ad7490_dev_state_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-040` | Driver state of one AD7490 device (SEU-robust encoding). |
+| `SDD-AD7490-1.10` | `ad7490_dev_t` | Type | `driver/ad7490_driver.h` | `LLR-AD7490-041` | Handle of one AD7490 device, owned by the caller. |
+| `SDD-AD7490-2.1` | `ad7490_init()` | Public function | `driver/ad7490_driver.c`, `driver/ad7490_driver.h` | `LLR-AD7490-010` | Power up the AD7490 and load its Control Register. |
+| `SDD-AD7490-2.2` | `ad7490_read_channel()` | Public function | `driver/ad7490_driver.c`, `driver/ad7490_driver.h` | `LLR-AD7490-011` | Convert one analog input channel (VIN0..VIN15). |
+| `SDD-AD7490-2.5` | `ad7490_set_power_mode()` | Public function | `driver/ad7490_driver.c`, `driver/ad7490_driver.h` | `LLR-AD7490-014` | Change the AD7490 power management mode (PM1..PM0). |
+| `SDD-AD7490-2.6` | `is_dev_cfg_ok()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-042` | Check the device-level constraints of a configuration. |
+| `SDD-AD7490-2.7` | `run_power_up()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-043` | QSPI init, 2 dummy frames with DIN high, then the CR write. |
+| `SDD-AD7490-2.8` | `read_single()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-044` | Single-channel conversion (2 or 3 frames) and decoding. |
+| `SDD-AD7490-2.9` | `decode_sample()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-045` | Check the echoed channel and convert DOUT into a sample. |
+| `SDD-AD7490-2.10` | `write_power_mode()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-046` | Write new PM1..PM0 and wait out the power-up time. |
+| `SDD-AD7490-2.11` | `is_auto_power_mode()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-047` | Tell whether a power mode sleeps after each conversion. |
+| `SDD-AD7490-2.12` | `read_after_wakeup()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-048` | AUTO modes: power-up dummy frame, then the result frame. |
+| `SDD-AD7490-3.1` | `is_ctrl_cfg_ok()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-020` | Check every Control Register option against its enum range. |
+| `SDD-AD7490-3.2` | `build_cr_frame()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-021` | Build the 16-bit DIN word that writes the Control Register. |
+| `SDD-AD7490-3.3` | `write_frame()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-022` | Send one 16-bit DIN word in one CS frame, ignore DOUT. |
+| `SDD-AD7490-3.4` | `txrx_frame()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-023` | Send one DIN word and receive the DOUT word of that frame. |
+| `SDD-AD7490-3.5` | `read_frame()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-024` | Receive one DOUT word while DIN = 0 (WRITE = 0, no CR write). |
+| `SDD-AD7490-3.7` | `decode_dout()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-026` | Split a DOUT word into channel ID and 12-bit code. |
+| `SDD-AD7490-3.8` | `frame_bytes_t` | Type | `driver/ad7490_driver.c` | `LLR-AD7490-027` | One 16-bit frame as the 2 bytes on the wire, MSB first. |
+| `SDD-AD7490-3.9` | `frame_to_bytes()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-028` | Serialise a 16-bit frame into 2 bytes, MSB first. |
+| `SDD-AD7490-3.10` | `bytes_to_frame()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-029` | Deserialise 2 bytes received MSB first into a 16-bit word. |
+| `SDD-AD7490-3.11` | `encode_cr_word()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-030` | Assemble the 12-bit Control Register word (WRITE = 1). |
+| `SDD-AD7490-3.12` | `seq_mode_cr_bits[]` | Data (static const table) | `driver/ad7490_driver.c` | `LLR-AD7490-031` | SEQ / SHADOW Control Register bits per ad7490_seq_mode_t. |
+| `SDD-AD7490-3.13` | `ad7490_seq_mode_t` | Type | `driver/ad7490_driver.c` | `LLR-AD7490-032` | SEQ / SHADOW bit combinations (AD7490 Table IV). |
+| `SDD-AD7490-3.14` | `ad7490_dout_t` | Type | `driver/ad7490_driver.c` | `LLR-AD7490-033` | Fields decoded from one 16-bit DOUT word. |
+| `SDD-AD7490-3.15` | `map_hal_status()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-034` | Translate a QSPI HAL status into an AD7490 status. |
+| `SDD-AD7490-3.16` | `init_bus()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-038` | Initialise the QSPI instance that the AD7490 is wired to. |
+| `SDD-AD7490-4.1` | `raw_to_mv()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-025` | Convert a 12-bit AD7490 code into the voltage at VINx. |
+| `SDD-AD7490-4.2` | `is_vref_ok()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-035` | Check REFIN against the datasheet-specified range. |
+| `SDD-AD7490-4.3` | `raw_to_offset_binary()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-036` | Map a code of either coding onto offset binary 0..4095. |
+| `SDD-AD7490-4.4` | `span_from_vref_mv()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-037` | Full input span selected by the RANGE bit. |
+| `SDD-AD7490-5.1` | `ad7490_sequencer_start()` | Public function | `driver/ad7490_driver.c`, `driver/ad7490_driver.h` | `LLR-AD7490-012` | Program the Shadow Register and start the sequence. |
+| `SDD-AD7490-5.2` | `ad7490_sequencer_read_scan()` | Public function | `driver/ad7490_driver.c`, `driver/ad7490_driver.h` | `LLR-AD7490-013` | Read one full pass: one sample of every sequenced channel. |
+| `SDD-AD7490-5.3` | `ad7490_sequencer_stop()` | Public function | `driver/ad7490_driver.c`, `driver/ad7490_driver.h` | `LLR-AD7490-015` | Stop the sequence and return to single-channel mode. |
+| `SDD-AD7490-5.4` | `mask_to_shadow()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-050` | Re-order a VINn bit mask into Shadow Register bit order. |
+| `SDD-AD7490-5.5` | `count_channels()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-051` | Count the channels set in a VINn bit mask. |
+| `SDD-AD7490-5.6` | `send_start_frames()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-052` | Shadow-load CR write, Shadow Register write, priming frame. |
+| `SDD-AD7490-5.7` | `send_stop_frame()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-053` | CR write with SEQ = 0, SHADOW = 0: ends the sequence. |
+| `SDD-AD7490-5.8` | `scan_one()` | Private function | `driver/ad7490_driver.c` | `LLR-AD7490-054` | Run one sequenced frame, check it, store it by channel. |
+| `SDD-AD7490-6.1` | `avg_reset()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-060` | Empty the window (all slots 0, no sample stored). |
+| `SDD-AD7490-6.2` | `avg_push()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-061` | Store a new sample, dropping the oldest one when full. |
+| `SDD-AD7490-6.3` | `avg_get_mv()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-062` | Rounded mean of the samples currently in the window. |
+| `SDD-AD7490-6.4` | `is_window_consistent()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-063` | Check the index fields of a window against its invariants. |
+| `SDD-AD7490-6.5` | `ad7490_avg_t` | Type | `driver/ad7490_monitor.h` | `LLR-AD7490-064` | Moving-average window (FIFO) of one channel. |
+| `SDD-AD7490-7.0` | `ad7490_monitor module` | Module (file scope) | `driver/ad7490_monitor.c`, `driver/ad7490_monitor.h` | `LLR-AD7490-001` | Periodic AD7490 acquisition with per-channel moving average and bounded re-configuration. |
+| `SDD-AD7490-7.1` | `ad7490_monitor_init()` | Public function | `driver/ad7490_monitor.c`, `driver/ad7490_monitor.h` | `LLR-AD7490-070` | Configure the monitor, initialise the ADC, start sequencing. |
+| `SDD-AD7490-7.2` | `ad7490_monitor_step()` | Public function | `driver/ad7490_monitor.c`, `driver/ad7490_monitor.h` | `LLR-AD7490-071` | One acquisition period: scan, update averages, or recover. |
+| `SDD-AD7490-7.3` | `ad7490_monitor_get_avg()` | Public function | `driver/ad7490_monitor.c`, `driver/ad7490_monitor.h` | `LLR-AD7490-072` | Moving average of one monitored channel. |
+| `SDD-AD7490-7.4` | `restart_adc()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-073` | Empty all windows, re-initialise the ADC, start sequencing. |
+| `SDD-AD7490-7.5` | `push_scan()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-074` | Push the last scan of every monitored channel into its window. |
+| `SDD-AD7490-7.6` | `reset_all_avg()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-075` | Empty the window of every channel. |
+| `SDD-AD7490-7.7` | `ad7490_monitor_t` | Type | `driver/ad7490_monitor.h` | `LLR-AD7490-076` | State of one monitored AD7490, owned by the caller. |
+| `SDD-AD7490-7.8` | `ad7490_mon_diag_t` | Type | `driver/ad7490_monitor.h` | `LLR-AD7490-077` | Health and re-configuration counters of a monitor. |
+| `SDD-AD7490-7.9` | `ad7490_monitor_reconfig()` | Public function | `driver/ad7490_monitor.c`, `driver/ad7490_monitor.h` | `LLR-AD7490-078` | One verified re-configuration attempt of the ADC. |
+| `SDD-AD7490-7.10` | `ad7490_monitor_get_diag()` | Public function | `driver/ad7490_monitor.c`, `driver/ad7490_monitor.h` | `LLR-AD7490-079` | Read the health flag and re-configuration counters. |
+| `SDD-AD7490-7.11` | `reconfig_attempt()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-080` | Count, run and verify one re-configuration attempt. |
+| `SDD-AD7490-7.12` | `scan_and_push()` | Private function | `driver/ad7490_monitor.c` | `LLR-AD7490-081` | Scan all channels, push them, track the stable period. |
+

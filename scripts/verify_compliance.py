@@ -258,6 +258,50 @@ def check_hamming_distances() -> list[str]:
     return errors
 
 
+def check_deviation_log() -> list[str]:
+    """Deviation / defensive log <-> source tags, and no line references.
+
+    Every DEV-* / DEF-* entry of DEVIATION_AND_DEFENSIVE_LOG.md must be
+    named in the source comment of the site it documents, and vice
+    versa. The log must locate sites by element name: a "file.c:123"
+    reference rots silently when lines move above the site.
+    """
+    errors: list[str] = []
+    log_path = ROOT / "docs" / "DEVIATION_AND_DEFENSIVE_LOG.md"
+    if not log_path.exists():
+        return [f"Missing required document: {log_path.name}"]
+
+    log_text = log_path.read_text(encoding="utf-8")
+    id_pattern = r"\b(?:DEV|DEF)-(?:QSPI|AD7490)-\d{3}\b"
+    log_ids = set(re.findall(id_pattern, log_text))
+
+    code_ids: set[str] = set()
+    for prod_path in PROD_FILES:
+        if prod_path.exists():
+            code_text = prod_path.read_text(encoding="utf-8")
+            code_ids.update(re.findall(id_pattern, code_text))
+
+    for log_id in sorted(log_ids - code_ids):
+        errors.append(
+            f"Log entry {log_id} is not named in any production source "
+            f"comment"
+        )
+    for code_id in sorted(code_ids - log_ids):
+        errors.append(
+            f"Source comment names {code_id}, which has no entry in "
+            f"DEVIATION_AND_DEFENSIVE_LOG.md"
+        )
+
+    for line_no, line in enumerate(log_text.splitlines(), start=1):
+        for ref in re.findall(r"[A-Za-z0-9_]+\.[ch]:\d+", line):
+            errors.append(
+                f"DEVIATION_AND_DEFENSIVE_LOG.md:{line_no}: line-number "
+                f"reference '{ref}'; name the function or field instead"
+            )
+
+    return errors
+
+
 def check_traceability() -> list[str]:
     errors: list[str] = []
     required_docs = [
@@ -354,6 +398,7 @@ def main() -> int:
             all_errors.extend(check_functions_and_signatures(h_path, c_path))
 
     all_errors.extend(check_hamming_distances())
+    all_errors.extend(check_deviation_log())
     all_errors.extend(check_traceability())
 
     if all_errors:
@@ -370,6 +415,8 @@ def main() -> int:
     print("  - Rule 2 naming             : PASS (3..31 chars, no vague stems)")
     print("  - Rule 4 function metrics   : PASS (<= 100 lines, 1 return)")
     print("  - Rule 9 SEU Hamming dist   : PASS (HD >= 12..32)")
+    print("  - Deviation / defensive log : PASS (IDs tagged in source,")
+    print("                                no line-number references)")
     print("  - DO-178C Traceability      : PASS (100% bi-directional match)")
     print("================================================================")
     return 0

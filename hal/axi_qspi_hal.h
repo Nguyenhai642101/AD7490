@@ -118,8 +118,11 @@ qspi_hal_status_t qspi_hal_init(qspi_hal_config_t const * p_cfg);
  * @note        Not ISR-safe. Not reentrant on the same base_addr: the
  *              caller serialises access (e.g. RTOS mutex). Blocking
  *              busy-wait. SS0 is released only after the last byte has
- *              completely shifted in. p_rx_bytes is written only on
- *              QSPI_HAL_OK.
+ *              completely shifted in. p_rx_bytes holds byte_count valid
+ *              bytes only when the return value is QSPI_HAL_OK: on
+ *              QSPI_HAL_ERR_HW the drain may already have stored the
+ *              bytes popped before the fault (no roll-back), so the
+ *              caller discards the whole array unless QSPI_HAL_OK.
  */
 qspi_hal_status_t qspi_hal_transceive_bytes(qspi_hal_config_t const * p_cfg,
                                             uint8_t const * p_tx_bytes,
@@ -154,8 +157,11 @@ qspi_hal_status_t qspi_hal_write_bytes(qspi_hal_config_t const * p_cfg,
  * @return      QSPI_HAL_OK, QSPI_HAL_ERR_PARAM, QSPI_HAL_ERR_TIMEOUT,
  *              QSPI_HAL_ERR_HW.
  * @note        Not ISR-safe. Not reentrant on the same base_addr.
- *              Blocking busy-wait. p_rx_bytes is written only on
- *              QSPI_HAL_OK.
+ *              Blocking busy-wait. p_rx_bytes holds byte_count valid
+ *              bytes only when the return value is QSPI_HAL_OK: on
+ *              QSPI_HAL_ERR_HW the drain may already have stored the
+ *              bytes popped before the fault (no roll-back), so the
+ *              caller discards the whole array unless QSPI_HAL_OK.
  */
 qspi_hal_status_t qspi_hal_read_bytes(qspi_hal_config_t const * p_cfg,
                                       uint8_t dummy_tx_byte,

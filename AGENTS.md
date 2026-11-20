@@ -68,7 +68,7 @@ When auditing the code for functional correctness against `docs/AD7490.PDF` and 
    - Per AD7490 Figure 16, `ad7490_init()` sends **2 dummy frames with `DIN = 0xFFFF`** followed by the target Control Register write frame.
 3. **1-Frame Conversion Pipeline (`driver/ad7490_driver.c`)**:
    - Frame $N$ converts the channel selected at the end of Frame $N-1$.
-   - Therefore, an isolated `ad7490_read_channel()` executes **2 frames**: Frame 1 selects `channel_id` (and serves as the power-up conversion in `AUTO` modes), Frame 2 converts `channel_id` and checks `DOUT[15:12] == channel_id`.
+   - Therefore, an isolated `ad7490_read_channel()` executes **2 frames in `NORMAL`**: Frame 1 selects `channel_id`, Frame 2 converts it. In **`AUTO_STANDBY` / `AUTO_SHUTDOWN` it executes 3 frames** (Fig. 14, 15): the CR write of Frame 1 puts the part to sleep, Frame 2 is the power-up dummy (`WRITE = 0`, invalid DOUT, discarded) and Frame 3 (`WRITE = 0`) converts `channel_id`. The result frame checks `DOUT[15:12] == channel_id`.
 4. **Shadow Register Sequencer & CR Scrubbing (`driver/ad7490_driver.c`)**:
    - In the AD7490 Shadow Register (Figure 18), **`VIN0` is bit 15 (MSB) and `VIN15` is bit 0 (LSB)**. `mask_to_shadow()` reverses the bit order from the API's `bit n = VINn` convention.
    - `ad7490_sequencer_start()` sends 3 frames: (1) CR with `SEQ=0, SHADOW=1`, (2) the 16-bit Shadow word, and (3) a priming frame (`WRITE=0`) so the next scan starts cleanly on sequenced channels.
@@ -96,7 +96,8 @@ powershell -ExecutionPolicy Bypass -File scripts/verify_compliance.ps1
 
 ### Step 2: Style Check, Unit Tests, Target Build & Coverage (Linux / WSL / MSYS2 with GCC)
 ```bash
-# Run Rule 0 style checks (newline + test/check_style.awk)
+# Run Rule 0 style checks (80 cols, Allman, no //, no tabs, no "../" include,
+# single trailing newline) via test/check_style.awk
 make style
 
 # Build and run all 5 host unit-test suites (test_qspi_hal, test_frame_convert, test_device, test_sequencer, test_monitor)
@@ -104,6 +105,9 @@ make test
 
 # Generate line & branch coverage report via gcovr (hal/ and driver/)
 make coverage
+
+# MC/DC condition coverage (needs gcc-14 / gcov-14 and gcovr >= 8)
+make mcdc
 
 # Cross-compile Cortex-A53 static library and inspect per-function stack usage (.su)
 make target CROSS_COMPILE=aarch64-none-elf-

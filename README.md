@@ -10,7 +10,7 @@ Developed and verified to **DO-178C DAL A**, **MISRA C:2012**, and **BARR-C:2018
 
 - **Complete Hardware-to-Application Stack:**
   - **AXI Quad SPI HAL (`hal/axi_qspi_hal.*`):** Polled 8-bit master driver for Xilinx PG153 (`ACLK = 100 MHz`, `16x1` prescaler $\rightarrow$ `SCK = 6.25 MHz`, 256-byte FIFOs, manual `SS0` framing based on true RX FIFO occupancy).
-  - **AD7490 Core Driver (`driver/ad7490_driver.*`):** Implements the Figure 16 power-up dummy-frame sequence (`2 x 0xFFFF`), 2-frame pipelined single-channel conversions, power management modes (`NORMAL`, `FULL_SHUTDOWN`, `AUTO_STANDBY`, `AUTO_SHUTDOWN`), Shadow Register channel sequencer (`VIN0 = MSB`), online Control Register scrubbing (`SEQ=1, SHADOW=0`), and overflow-proof fixed-point millivolt conversion (`0..5050 mV`).
+  - **AD7490 Core Driver (`driver/ad7490_driver.*`):** Implements the Figure 16 power-up dummy-frame sequence (`2 x 0xFFFF`), pipelined single-channel conversions (2 frames in `NORMAL`, 3 frames with a power-up dummy in `AUTO_STANDBY`/`AUTO_SHUTDOWN`), power management modes (`NORMAL`, `FULL_SHUTDOWN`, `AUTO_STANDBY`, `AUTO_SHUTDOWN`), Shadow Register channel sequencer (`VIN0 = MSB`), online Control Register scrubbing (`SEQ=1, SHADOW=0`), and overflow-proof fixed-point millivolt conversion (`0..5050 mV`).
   - **Periodic 1 ms Monitor (`driver/ad7490_monitor.*`):** Performs periodic sequenced scans, maintains a self-healing 16-sample moving-average ring buffer per channel (no cached running sum to prevent SEU drift), and executes bounded fault recovery (maximum 3 verified re-configuration attempts per fault episode before latching `AD7490_ERR_DEVICE_FAILED`).
 - **Full DO-178C DAL A Certification Artefact Suite (`docs/`):**
   - Low-Level Requirements Specification ([`docs/LOW_LEVEL_REQUIREMENTS.md`](docs/LOW_LEVEL_REQUIREMENTS.md))
@@ -195,6 +195,9 @@ make test
 
 # Generate console + HTML line and branch coverage report in build/coverage/index.html
 make coverage
+
+# MC/DC condition coverage with GCC 14 -fcondition-coverage (needs gcc-14, gcovr >= 8)
+make mcdc
 ```
 
 ### 5.3 Cross-Compile Cortex-A53 Static Library & Verify Worst-Case Stack Usage

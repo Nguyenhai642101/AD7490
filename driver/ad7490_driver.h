@@ -226,10 +226,13 @@ ad7490_status_t ad7490_init(ad7490_dev_t * p_dev,
  *              AD7490_ERR_SPI, AD7490_ERR_TIMEOUT,
  *              AD7490_ERR_CHAN_MISMATCH.
  * @note        Not ISR-safe. Not reentrant on the same QSPI instance.
- *              Blocking, WCET: 2 frames. Frame 1 writes ADD3..ADD0
- *              (in AUTO power modes it is also the power-up dummy
- *              conversion); frame 2 converts channel_id. The channel ID
- *              echoed in DOUT is checked against channel_id.
+ *              Blocking. Frame 1 writes ADD3..ADD0. NORMAL mode: frame 2
+ *              converts channel_id (WCET 2 frames). AUTO_STANDBY /
+ *              AUTO_SHUTDOWN: the part sleeps after the CR write, so
+ *              frame 2 is a power-up dummy (WRITE = 0, result discarded)
+ *              and frame 3 converts channel_id (WCET 3 frames, Fig 14,
+ *              15). The channel ID echoed in DOUT is checked against
+ *              channel_id.
  *              AD7490_ERR_STATE: not initialised, sequencer active or
  *              FULL_SHUTDOWN power mode.
  */

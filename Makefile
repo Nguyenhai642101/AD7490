@@ -5,7 +5,9 @@
 #   make target          build/a53/libad7490.a  (+ .su stack usage files)
 #   make stack           largest stack usage per function (target build)
 #   make test            build and run the host unit tests
-#   make coverage        tests + coverage report (needs gcovr)
+#   make coverage        tests + line/branch coverage report (needs gcovr)
+#   make mcdc            tests rebuilt with GCC >= 14 -fcondition-coverage
+#                        + MC/DC condition coverage report (gcovr)
 #   make style           rule 0 checks (80 columns, no //, no tabs, ...)
 #   make clean           delete the build/ directory
 #
@@ -19,10 +21,14 @@ TARGET_AR     := $(CROSS_COMPILE)ar
 TARGET_ARCH   ?= -mcpu=cortex-a53
 HOST_CC       ?= gcc
 GCOVR         ?= gcovr
+# MC/DC needs GCC >= 14 (-fcondition-coverage) and its matching gcov
+MCDC_CC       ?= gcc-14
+MCDC_GCOV     ?= gcov-14
 
 A53_DIR  := build/a53
 HOST_DIR := build/host
 COV_DIR  := build/coverage
+MCDC_DIR := build/mcdc
 
 INC := -Ihal -Idriver
 
@@ -38,8 +44,10 @@ TARGET_CFLAGS := $(WARN) $(OPT) $(TARGET_ARCH) -ffreestanding \
 
 # Host tests: a failed ASSERT counts as a test failure (test_common.h)
 TEST_ASSERT := -D'ASSERT(expr)=test_assert((expr), (uint32_t)__LINE__)'
+TEST_EXTRA  ?=
 TEST_CFLAGS := -std=c99 -Wall -Wextra -Werror -O0 -g --coverage \
-               $(INC) -Itest -include test/test_common.h $(TEST_ASSERT)
+               $(INC) -Itest -include test/test_common.h $(TEST_ASSERT) \
+               $(TEST_EXTRA)
 
 A53_OBJS := $(A53_DIR)/axi_qspi_hal.o $(A53_DIR)/ad7490_driver.o \
             $(A53_DIR)/ad7490_monitor.o
@@ -53,7 +61,7 @@ HOST_DRIVER  := $(HOST_DIR)/ad7490_driver.o
 
 STYLE_FILES := $(wildcard hal/*.[ch] driver/*.[ch] test/*.[ch])
 
-.PHONY: all target stack test coverage style clean
+.PHONY: all target stack test coverage mcdc style clean
 
 all: target test style
 
@@ -119,17 +127,25 @@ $(HOST_DIR)/%.o: driver/%.c driver/ad7490_driver.h | $(HOST_DIR)
 
 coverage: test | $(COV_DIR)
 	@echo "--- line coverage ---"
-	@$(GCOVR) -r . --filter hal/ --filter driver/ \
+	@$(GCOVR) -r . $(HOST_DIR) --filter hal/ --filter driver/ \
 	  --object-directory $(HOST_DIR)
 	@echo "--- branch coverage (ASSERT failure branches excluded) ---"
-	@$(GCOVR) -r . --filter hal/ --filter driver/ \
+	@$(GCOVR) -r . $(HOST_DIR) --filter hal/ --filter driver/ \
 	  --object-directory $(HOST_DIR) \
 	  --txt-metric branch --exclude-lines-by-pattern '.*ASSERT\(.*'
-	@$(GCOVR) -r . --filter hal/ --filter driver/ \
+	@$(GCOVR) -r . $(HOST_DIR) --filter hal/ --filter driver/ \
 	  --object-directory $(HOST_DIR) \
 	  --exclude-lines-by-pattern '.*ASSERT\(.*' \
 	  --html-details $(COV_DIR)/index.html
 	@echo "HTML report: $(COV_DIR)/index.html"
+
+# MC/DC (masking) condition coverage: same tests, separate build directory
+mcdc:
+	@$(MAKE) --no-print-directory test HOST_CC=$(MCDC_CC) \
+	  HOST_DIR=$(MCDC_DIR) TEST_EXTRA=-fcondition-coverage
+	@echo "--- MC/DC condition coverage ($(MCDC_CC)) ---"
+	@$(GCOVR) -r . $(MCDC_DIR) --filter hal/ --filter driver/ \
+	  --gcov-executable $(MCDC_GCOV) --txt-metric condition
 
 # -------------------------------- style ------------------------------------
 

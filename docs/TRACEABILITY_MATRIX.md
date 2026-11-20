@@ -52,7 +52,7 @@ Every function (public and `static`), file-scope lookup table, and public type i
 | `LLR-AD7490-008` | `SDD-AD7490-1.7` | `ad7490_sample_t` | `ad7490_driver.h` | `test_device.c:test_read_channel()` |
 | `LLR-AD7490-009` | `SDD-AD7490-1.8` | `ad7490_ctrl_cfg_t` | `ad7490_driver.h` | `test_frame_convert.c:test_cr_encoding()` |
 | `LLR-AD7490-010` | `SDD-AD7490-2.1` | `ad7490_init()` | `ad7490_driver.h`, `ad7490_driver.c` | `test_device.c:test_init_sequence()`, `test_init_bus_errors()` |
-| `LLR-AD7490-011` | `SDD-AD7490-2.2` | `ad7490_read_channel()` | `ad7490_driver.h`, `ad7490_driver.c` | `test_device.c:test_read_channel()`, `test_read_errors()` |
+| `LLR-AD7490-011` | `SDD-AD7490-2.2` | `ad7490_read_channel()` | `ad7490_driver.h`, `ad7490_driver.c` | `test_device.c:test_read_channel()`, `test_read_errors()`, `test_auto_mode_reads()` |
 | `LLR-AD7490-012` | `SDD-AD7490-5.1` | `ad7490_sequencer_start()` | `ad7490_driver.h`, `ad7490_driver.c` | `test_sequencer.c:test_start_and_scan()`, `test_refused_calls()` |
 | `LLR-AD7490-013` | `SDD-AD7490-5.2` | `ad7490_sequencer_read_scan()` | `ad7490_driver.h`, `ad7490_driver.c` | `test_sequencer.c:test_start_and_scan()`, `test_scan_mismatch()` |
 | `LLR-AD7490-014` | `SDD-AD7490-2.5` | `ad7490_set_power_mode()` | `ad7490_driver.h`, `ad7490_driver.c` | `test_device.c:test_power_modes()`, `test_power_mode_errors()` |
@@ -80,9 +80,11 @@ Every function (public and `static`), file-scope lookup table, and public type i
 | `LLR-AD7490-041` | `SDD-AD7490-1.10` | `ad7490_dev_t` | `ad7490_driver.h` | `test_device.c:test_uninitialised_handle()` |
 | `LLR-AD7490-042` | `SDD-AD7490-2.6` | `is_dev_cfg_ok()` | `ad7490_driver.c` | `test_device.c:test_init_rejects_bad_config()` |
 | `LLR-AD7490-043` | `SDD-AD7490-2.7` | `run_power_up()` | `ad7490_driver.c` | `test_device.c:test_init_sequence()`, `test_init_bus_errors()` |
-| `LLR-AD7490-044` | `SDD-AD7490-2.8` | `read_single()` | `ad7490_driver.c` | `test_device.c:test_read_channel()`, `test_read_errors()` |
+| `LLR-AD7490-044` | `SDD-AD7490-2.8` | `read_single()` | `ad7490_driver.c` | `test_device.c:test_read_channel()`, `test_read_errors()`, `test_auto_mode_reads()` |
 | `LLR-AD7490-045` | `SDD-AD7490-2.9` | `decode_sample()` | `ad7490_driver.c` | `test_device.c:test_read_channel()`, `test_read_errors()` |
 | `LLR-AD7490-046` | `SDD-AD7490-2.10` | `write_power_mode()` | `ad7490_driver.c` | `test_device.c:test_power_modes()`, `test_power_mode_errors()` |
+| `LLR-AD7490-047` | `SDD-AD7490-2.11` | `is_auto_power_mode()` | `ad7490_driver.c` | `test_device.c:test_read_channel()`, `test_auto_mode_reads()` |
+| `LLR-AD7490-048` | `SDD-AD7490-2.12` | `read_after_wakeup()` | `ad7490_driver.c` | `test_device.c:test_auto_mode_reads()` |
 | `LLR-AD7490-050` | `SDD-AD7490-5.4` | `mask_to_shadow()` | `ad7490_driver.c` | `test_sequencer.c:test_start_and_scan()` |
 | `LLR-AD7490-051` | `SDD-AD7490-5.5` | `count_channels()` | `ad7490_driver.c` | `test_sequencer.c:test_start_and_scan()` |
 | `LLR-AD7490-052` | `SDD-AD7490-5.6` | `send_start_frames()` | `ad7490_driver.c` | `test_sequencer.c:test_start_and_scan()`, `test_bus_errors()` |

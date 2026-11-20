@@ -18,6 +18,9 @@ static void test_init_bus_errors(void);
 static void test_read_channel(void);
 static void test_read_errors(void);
 static void test_power_modes(void);
+static void check_auto_mode_reads(ad7490_power_mode_t power_mode,
+                                  uint16_t cr_din_ch2);
+static void test_auto_mode_reads(void);
 static void test_power_mode_errors(void);
 static void test_corrupted_handle(void);
 
@@ -31,6 +34,7 @@ int main(void)
     test_read_channel();
     test_read_errors();
     test_power_modes();
+    test_auto_mode_reads();
     test_power_mode_errors();
     test_corrupted_handle();
 
@@ -249,12 +253,67 @@ static void test_power_modes(void)
     CHECK(0x00U == fake_last_dummy_byte());
     CHECK(AD7490_OK == ad7490_read_channel(&dev, 1U, &sample));
     CHECK(1U == sample.channel_id);
+}
 
-    /* Auto standby still allows single reads */
-    CHECK(AD7490_OK == ad7490_set_power_mode(&dev,
-                                             AD7490_POWER_AUTO_STANDBY));
+
+/*
+ * AUTO modes (AD7490 Fig 14, 15): a CR write puts the part to sleep on
+ * the CS rising edge, the next frame is a dummy that returns INVALID
+ * data, the frame after it is valid. The model returns the right channel
+ * bits with a wrong code on invalid frames, so the value is checked.
+ * cr_din_ch2: expected DIN of the CR write selecting VIN2 in this mode.
+ */
+static void check_auto_mode_reads(ad7490_power_mode_t power_mode,
+                                  uint16_t cr_din_ch2)
+{
+    ad7490_dev_t dev;
+    ad7490_config_t cfg = make_cfg();
+    ad7490_sample_t sample = { 99U, 9999U, 9999U };
+
+    reset_model();
+    CHECK(AD7490_OK == ad7490_init(&dev, &cfg));
+    CHECK(AD7490_OK == ad7490_set_power_mode(&dev, power_mode));
+
+    /* 3 frames: CR write (select), dummy WRITE=0, valid WRITE=0 */
+    fake_clear_frame_count();
     CHECK(AD7490_OK == ad7490_read_channel(&dev, 2U, &sample));
+    CHECK(3U == fake_frame_count());
+    CHECK(cr_din_ch2 == fake_frame_din(1U));
+    CHECK(0x0000U == fake_frame_din(2U));
+    CHECK(0x0000U == fake_frame_din(3U));
     CHECK(2U == sample.channel_id);
+    CHECK(0x210U == sample.raw_lsb);
+    CHECK(645U == sample.voltage_mv);   /* 528 * 5000 / 4096 = 644.5 */
+
+    /* Back-to-back: part asleep after the valid conversion */
+    CHECK(!fake_adc_is_powered());
+    CHECK(AD7490_OK == ad7490_read_channel(&dev, 7U, &sample));
+    CHECK(7U == sample.channel_id);
+    CHECK(0x710U == sample.raw_lsb);
+
+    /* The model really produced invalid frames, none was returned */
+    CHECK(0U < fake_adc_invalid_count());
+
+    /* Bus error on the dummy frame or on the result frame */
+    sample.raw_lsb = 9999U;
+    fake_clear_frame_count();
+    fake_fail_frame(2U);
+    CHECK(AD7490_ERR_TIMEOUT == ad7490_read_channel(&dev, 3U, &sample));
+    CHECK(2U == fake_frame_count());
+    fake_clear_frame_count();
+    fake_fail_frame(3U);
+    CHECK(AD7490_ERR_TIMEOUT == ad7490_read_channel(&dev, 3U, &sample));
+    fake_fail_frame(0U);
+    CHECK(9999U == sample.raw_lsb);
+    CHECK(AD7490_STATE_READY == dev.state);
+}
+
+
+static void test_auto_mode_reads(void)
+{
+    /* CR = WRITE | ADD=2 | PM | CODING=1: standby 0x881, shutdown 0x891 */
+    check_auto_mode_reads(AD7490_POWER_AUTO_STANDBY, 0x8810U);
+    check_auto_mode_reads(AD7490_POWER_AUTO_SHUTDOWN, 0x8910U);
 }
 
 

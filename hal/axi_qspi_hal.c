@@ -315,7 +315,8 @@ static inline void reg_write32(uintptr_t base_addr,
                                uint32_t offset_bytes,
                                uint32_t reg_word)
 {
-    /* MISRA deviation: Rule 11.4 — MMIO register access — only here */
+    /* MISRA deviation: Rule 11.4 — MMIO register access — only here;
+     * deviation log entry DEV-QSPI-001 */
     volatile uint32_t * p_reg =
         (volatile uint32_t *)(base_addr + (uintptr_t)offset_bytes);
 
@@ -337,7 +338,8 @@ static inline void reg_write32(uintptr_t base_addr,
 static inline uint32_t reg_read32(uintptr_t base_addr,
                                   uint32_t offset_bytes)
 {
-    /* MISRA deviation: Rule 11.4 — MMIO register access — only here */
+    /* MISRA deviation: Rule 11.4 — MMIO register access — only here;
+     * deviation log entry DEV-QSPI-002 */
     volatile uint32_t const * p_reg =
         (volatile uint32_t const *)(base_addr + (uintptr_t)offset_bytes);
     uint32_t reg_word = 0U;
@@ -447,7 +449,8 @@ static uint32_t build_control_word(qspi_clock_mode_t clock_mode)
     }
     else
     {
-        /* DEFENSIVE [DO-178C]: RAM bit-flip — unreachable in normal test */
+        /* DEFENSIVE [DO-178C]: RAM bit-flip — unreachable in normal
+         * test; defensive log entry DEF-QSPI-001 */
     }
 
     return ctrl_word;
@@ -685,6 +688,9 @@ static qspi_hal_status_t run_bus_cycle(uintptr_t base_addr,
  * @return      QSPI_HAL_OK, QSPI_HAL_ERR_HW.
  * @note        run_bus_cycle() already saw byte_count bytes; RX empty here
  *              means a hardware fault, reported as QSPI_HAL_ERR_HW.
+ *              The bytes popped before the fault stay written in
+ *              p_rx_bytes (no roll-back): the caller discards the whole
+ *              array unless QSPI_HAL_OK is returned.
  */
 static qspi_hal_status_t drain_rx_bytes(uintptr_t base_addr,
                                         uint8_t * p_rx_bytes,

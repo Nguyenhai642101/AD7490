@@ -123,6 +123,9 @@ static ad7490_status_t run_power_up(ad7490_config_t const * p_cfg);
 static ad7490_status_t read_single(ad7490_config_t const * p_cfg,
                                    uint8_t channel_id,
                                    ad7490_sample_t * p_sample);
+static bool is_auto_power_mode(ad7490_power_mode_t power_mode);
+static ad7490_status_t read_after_wakeup(qspi_hal_config_t const * p_qspi_cfg,
+                                         uint16_t * p_rx_frame);
 static ad7490_status_t decode_sample(ad7490_config_t const * p_cfg,
                                      uint8_t channel_id,
                                      uint16_t rx_frame,
@@ -604,7 +607,7 @@ static ad7490_status_t run_power_up(ad7490_config_t const * p_cfg)
 
 
 /**
- * @brief       Two-frame single-channel conversion and result decoding.
+ * @brief       Single-channel conversion (2 or 3 frames) and decoding.
  * @req         LLR-AD7490-044
  * @design      SDD-AD7490-2.8
  * @param[in]   p_cfg       Validated configuration of a READY device.
@@ -613,7 +616,12 @@ static ad7490_status_t run_power_up(ad7490_config_t const * p_cfg)
  * @return      AD7490_OK, AD7490_ERR_PARAM, AD7490_ERR_SPI,
  *              AD7490_ERR_TIMEOUT, AD7490_ERR_CHAN_MISMATCH.
  * @note        The AD7490 converts, in frame N, the channel written in
- *              frame N-1, hence two frames per isolated read (Fig 2).
+ *              frame N-1 (Table IV, Fig 2). Frame 1 selects channel_id.
+ *              NORMAL: frame 2 converts it (2 frames).
+ *              AUTO_STANDBY / AUTO_SHUTDOWN: the CR write of frame 1
+ *              sends the part to its low-power state on the CS rising
+ *              edge, so frame 2 is the power-up dummy (INVALID data) and
+ *              frame 3 converts channel_id (3 frames, Fig 14, 15).
  */
 static ad7490_status_t read_single(ad7490_config_t const * p_cfg,
                                    uint8_t channel_id,
@@ -622,10 +630,12 @@ static ad7490_status_t read_single(ad7490_config_t const * p_cfg,
     ad7490_status_t result = AD7490_OK;
     uint16_t cr_frame = 0U;
     uint16_t rx_frame = 0U;
+    bool is_auto_mode = false;
 
     ASSERT(NULL != p_cfg);
     ASSERT(NULL != p_sample);
 
+    is_auto_mode = is_auto_power_mode(p_cfg->ctrl_cfg.power_mode);
     result = build_cr_frame(&p_cfg->ctrl_cfg,
                             channel_id,
                             AD7490_SEQ_MODE_SINGLE,
@@ -641,14 +651,19 @@ static ad7490_status_t read_single(ad7490_config_t const * p_cfg,
         /* Propagate invalid ctrl_cfg (handle corrupted) */
     }
 
-    if (AD7490_OK == result)
+    if (AD7490_OK != result)
     {
-        /* Frame 2: converts channel_id; CR rewritten, ADD unchanged */
-        result = txrx_frame(&p_cfg->qspi_cfg, cr_frame, &rx_frame);
+        /* Propagate error from frame 1 */
+    }
+    else if (is_auto_mode)
+    {
+        /* Frames 2 and 3: power-up dummy, then the valid result */
+        result = read_after_wakeup(&p_cfg->qspi_cfg, &rx_frame);
     }
     else
     {
-        /* Propagate error from frame 1 */
+        /* Frame 2: converts channel_id; CR rewritten, ADD unchanged */
+        result = txrx_frame(&p_cfg->qspi_cfg, cr_frame, &rx_frame);
     }
 
     if (AD7490_OK == result)
@@ -657,7 +672,73 @@ static ad7490_status_t read_single(ad7490_config_t const * p_cfg,
     }
     else
     {
-        /* Propagate error from frame 2 */
+        /* Propagate error from the conversion frame(s) */
+    }
+
+    return result;
+}
+
+
+/**
+ * @brief       Tell whether a power mode sleeps after each conversion.
+ * @req         LLR-AD7490-047
+ * @design      SDD-AD7490-2.11
+ * @param[in]   power_mode  Validated power mode.
+ * @return      true for AUTO_STANDBY and AUTO_SHUTDOWN, false otherwise.
+ * @note        Pure helper; cannot fail. One condition per decision.
+ */
+static bool is_auto_power_mode(ad7490_power_mode_t power_mode)
+{
+    bool is_auto = false;
+
+    if (AD7490_POWER_AUTO_STANDBY == power_mode)
+    {
+        is_auto = true;
+    }
+    else if (AD7490_POWER_AUTO_SHUTDOWN == power_mode)
+    {
+        is_auto = true;
+    }
+    else
+    {
+        is_auto = false;
+    }
+
+    return is_auto;
+}
+
+
+/**
+ * @brief       AUTO modes: power-up dummy frame, then the result frame.
+ * @req         LLR-AD7490-048
+ * @design      SDD-AD7490-2.12
+ * @param[in]   p_qspi_cfg  QSPI instance of a READY device.
+ * @param[out]  p_rx_frame  DOUT of the valid conversion, only on OK.
+ * @return      AD7490_OK, AD7490_ERR_PARAM, AD7490_ERR_SPI,
+ *              AD7490_ERR_TIMEOUT.
+ * @note        Both frames send WRITE = 0, as the datasheet requires for
+ *              the dummy cycle (Fig 14, 15): the CR (channel, PM) stays
+ *              unchanged. The dummy frame (16 SCLK = 2.56 us) covers the
+ *              1 us wake-up time t12; its DOUT is invalid and discarded.
+ *              WCET: 2 frames.
+ */
+static ad7490_status_t read_after_wakeup(qspi_hal_config_t const * p_qspi_cfg,
+                                         uint16_t * p_rx_frame)
+{
+    ad7490_status_t result = AD7490_OK;
+    uint16_t dummy_rx_frame = 0U;
+
+    ASSERT(NULL != p_rx_frame);
+
+    result = read_frame(p_qspi_cfg, &dummy_rx_frame);
+
+    if (AD7490_OK == result)
+    {
+        result = read_frame(p_qspi_cfg, p_rx_frame);
+    }
+    else
+    {
+        /* Propagate error from the dummy frame */
     }
 
     return result;
@@ -1266,7 +1347,8 @@ static uint32_t encode_cr_word(ad7490_ctrl_cfg_t const * p_ctrl_cfg,
     }
     else
     {
-        /* DEFENSIVE [DO-178C]: RAM bit-flip — unreachable in normal test */
+        /* DEFENSIVE [DO-178C]: RAM bit-flip — unreachable in normal
+         * test; defensive log entry DEF-AD7490-001 */
     }
 
     return cr_word;
@@ -1347,7 +1429,8 @@ static ad7490_status_t map_hal_status(qspi_hal_status_t hal_status)
             break;
 
         default:
-            /* DEFENSIVE [DO-178C]: bit-flip — unreachable in normal test */
+            /* DEFENSIVE [DO-178C]: bit-flip — unreachable in normal
+             * test; defensive log entry DEF-AD7490-002 */
             result = AD7490_ERR_SPI;
             break;
     }

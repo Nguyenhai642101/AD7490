@@ -21,6 +21,25 @@
 #define FAKE_DIN_CR_SHIFT           (4U)
 #define FAKE_SHADOW_VIN0_BIT        (0x8000U)
 
+/* PM1..PM0 = CR bits 5..4 = DIN bits 9..8 (AD7490 Table III) */
+#define FAKE_DIN_PM_SHIFT           (8U)
+#define FAKE_PM_MASK                (0x3U)
+#define FAKE_PM_NORMAL              (0x3U)
+#define FAKE_PM_FULL_SHUTDOWN       (0x2U)
+
+/* DOUT code of a frame clocked while the part is not powered up
+ * ("INVALID DATA", Fig 13-15). The channel bits stay correct on
+ * purpose: the worst case, which the channel echo check cannot catch. */
+#define FAKE_INVALID_CODE           (0x0A5U)
+
+/* Power state of the model at a CS falling edge */
+typedef enum
+{
+    FAKE_POWER_OFF    = 0U, /* Shut down: this frame powers it up      */
+    FAKE_POWER_WAKING = 1U, /* t_POWER-UP (1 us) not yet elapsed      */
+    FAKE_POWER_ON     = 2U  /* Fully powered: conversion valid        */
+} fake_power_t;
+
 typedef struct
 {
     fake_mode_t       mode;
@@ -45,6 +64,10 @@ typedef struct
     bool              is_dead;
     uint32_t          start_latency;
     uint32_t          delay_left;
+    uint32_t          pm_bits;
+    fake_power_t      power_state;
+    bool              is_cr_written;
+    uint32_t          invalid_frame_count;
 } fake_state_t;
 
 static fake_state_t g_fake;
@@ -53,6 +76,7 @@ static uint32_t next_in_shadow(uint32_t current_ch);
 static uint32_t first_in_shadow(void);
 static uint32_t next_seq_channel(void);
 static void decode_cr_write(uint16_t din);
+static fake_power_t next_power_state(fake_power_t start_state);
 static uint16_t adc_frame(uint16_t din);
 static qspi_hal_status_t run_frame(uint16_t din, uint8_t * p_rx_bytes);
 
@@ -92,6 +116,12 @@ void fake_reset(fake_mode_t mode)
     g_fake.is_dead = false;
     g_fake.start_latency = 0U;
     g_fake.delay_left = 0U;
+
+    /* Powered up in Normal mode */
+    g_fake.pm_bits = FAKE_PM_NORMAL;
+    g_fake.power_state = FAKE_POWER_ON;
+    g_fake.is_cr_written = false;
+    g_fake.invalid_frame_count = 0U;
 }
 
 
@@ -214,6 +244,18 @@ uint32_t fake_adc_cr(void)
 }
 
 
+uint32_t fake_adc_invalid_count(void)
+{
+    return g_fake.invalid_frame_count;
+}
+
+
+bool fake_adc_is_powered(void)
+{
+    return (FAKE_POWER_ON == g_fake.power_state);
+}
+
+
 /* ------------------------------------------------------------------ */
 /* HAL API implemented by the double                                   */
 /* ------------------------------------------------------------------ */
@@ -324,6 +366,20 @@ static uint16_t adc_frame(uint16_t din)
 {
     uint32_t code = (uint32_t)g_fake.codes[g_fake.conv_ch];
     uint16_t dout = 0U;
+    fake_power_t start_state = g_fake.power_state;
+
+    g_fake.is_cr_written = false;
+
+    /* Not powered at the CS falling edge: the conversion is invalid */
+    if (FAKE_POWER_ON != start_state)
+    {
+        code = FAKE_INVALID_CODE;
+        g_fake.invalid_frame_count++;
+    }
+    else
+    {
+        /* Powered: valid conversion */
+    }
 
     /* Conversion uses the CR in force before this frame's write */
     if (0U == g_fake.coding_bit)
@@ -379,9 +435,56 @@ static uint16_t adc_frame(uint16_t din)
         /* WRITE = 0 outside a sequence: same channel again */
     }
 
+    /* Power state at the CS rising edge that ends this frame */
+    g_fake.power_state = next_power_state(start_state);
     g_fake.conv_ch = g_fake.next_ch;
 
     return dout;
+}
+
+
+/*
+ * Power behaviour of AD7490 Figures 13 to 15:
+ * - Normal: stays on; leaving shutdown takes t_POWER-UP after CS rising,
+ *   so the next frame may still be invalid (WAKING) in the worst case.
+ * - Full shutdown: off until PM bits change.
+ * - Auto standby / auto shutdown: a CR write enters the low-power state
+ *   on the CS rising edge; a powered (valid) conversion does too; a frame
+ *   clocked while off is the dummy cycle that powers the part up.
+ */
+static fake_power_t next_power_state(fake_power_t start_state)
+{
+    fake_power_t next_state = FAKE_POWER_OFF;
+
+    if (FAKE_PM_NORMAL == g_fake.pm_bits)
+    {
+        if (FAKE_POWER_OFF == start_state)
+        {
+            next_state = FAKE_POWER_WAKING;
+        }
+        else
+        {
+            next_state = FAKE_POWER_ON;
+        }
+    }
+    else if (FAKE_PM_FULL_SHUTDOWN == g_fake.pm_bits)
+    {
+        next_state = FAKE_POWER_OFF;
+    }
+    else if (g_fake.is_cr_written)
+    {
+        next_state = FAKE_POWER_OFF;
+    }
+    else if (FAKE_POWER_ON == start_state)
+    {
+        next_state = FAKE_POWER_OFF;
+    }
+    else
+    {
+        next_state = FAKE_POWER_ON;
+    }
+
+    return next_state;
 }
 
 
@@ -393,6 +496,8 @@ static void decode_cr_write(uint16_t din)
 
     g_fake.cr_word = (uint32_t)din >> FAKE_DIN_CR_SHIFT;
     g_fake.coding_bit = ((uint32_t)din >> FAKE_DIN_CODING_SHIFT) & 1U;
+    g_fake.pm_bits = ((uint32_t)din >> FAKE_DIN_PM_SHIFT) & FAKE_PM_MASK;
+    g_fake.is_cr_written = true;
 
     if ((0U == seq_bit) && (1U == shadow_bit))
     {

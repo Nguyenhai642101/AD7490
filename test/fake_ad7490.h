@@ -7,7 +7,10 @@
  * ADC model: 1-frame pipeline (frame N converts the channel selected at
  * the end of frame N-1), Control Register decode (WRITE, SEQ, SHADOW,
  * ADD, CODING), Shadow Register sequencer ring, SEQ=1/SHADOW=0 CR update
- * without stopping the sequence. Fault injection: bus timeout on a
+ * without stopping the sequence, power states of Figures 13-15 (a frame
+ * clocked while the part is not powered returns invalid data; AUTO modes
+ * shut down after a CR write and after each valid conversion). Fault
+ * injection: bus timeout on a
  * chosen frame, wrong channel echo, DOUT stuck high, register loss
  * (glitch), CODING bit upset, extra sequencer start latency.
  */
@@ -53,5 +56,7 @@ void fake_adc_glitch(void);
 void fake_adc_upset_coding(void);
 uint32_t fake_adc_coding_bit(void);
 uint32_t fake_adc_cr(void);
+uint32_t fake_adc_invalid_count(void);
+bool fake_adc_is_powered(void);
 
 #endif /* FAKE_AD7490_H */

@@ -24,19 +24,21 @@ Verification consists of two independent, automated stages:
 - **AXI Quad SPI Register Model (`test/test_qspi_hal.c`):** Allocates a 32-word (128-byte) aligned host memory window simulating the PG153 register space (`GIER 0x1C`, `SRR 0x40`, `SPICR 0x60`, `SPISR 0x64`, `SPIDTR 0x68`, `SPIDRR 0x6C`, `SPISSR 0x70`, `RXOCY 0x78`).
 - **Behavioural AD7490 + QSPI Double (`test/fake_ad7490.h`, `test/fake_ad7490.c`):**
   - **`FAKE_MODE_RAW`**: Records transmitted DIN words (`fake_frame_din()`), byte counts, and dummy bytes while returning programmable RX words and HAL status codes.
-  - **`FAKE_MODE_ADC`**: Implements the full AD7490 state machine including the **1-frame conversion pipeline** (Frame $N$ outputs the conversion of the channel selected at the end of Frame $N-1$), 12-bit Control Register decoding (`WRITE`, `SEQ`, `SHADOW`, `ADD3..0`, `CODING`), Shadow Register bit-reversed ring sequencing (`VIN0 = MSB`), `SEQ=1, SHADOW=0` online CR updates without interrupting the sequence, and fault injection (bus timeout on frame $K$, channel echo mismatch on frame $K$, `DOUT` stuck high `0xFFFF`, brown-out register reset glitch, `CODING` bit SEU upset, and configurable sequencer start latency).
+  - **`FAKE_MODE_ADC`**: Implements the full AD7490 state machine including the **1-frame conversion pipeline** (Frame $N$ outputs the conversion of the channel selected at the end of Frame $N-1$), 12-bit Control Register decoding (`WRITE`, `SEQ`, `SHADOW`, `ADD3..0`, `CODING`), Shadow Register bit-reversed ring sequencing (`VIN0 = MSB`), `SEQ=1, SHADOW=0` online CR updates without interrupting the sequence, and fault injection (bus timeout on frame $K$, channel echo mismatch on frame $K$, `DOUT` stuck high `0xFFFF`, brown-out register reset glitch, power states of AD7490 Fig. 13-15 (invalid DOUT while not powered; `AUTO` modes sleep after a CR write and after each valid conversion), `CODING` bit SEU upset, and configurable sequencer start latency).
 
 ---
 
 ## 2. Unit-Test Suite Summary
 
-| Test Executable | Source File | Target Module Under Test | Test Functions | Requirements Verified | Status |
-|:---|:---|:---|:---:|:---|:---:|
-| `test_qspi_hal` | [`test/test_qspi_hal.c`](../test/test_qspi_hal.c) | `hal/axi_qspi_hal.c` | 6 | `LLR-QSPI-001` .. `LLR-QSPI-031` | **PASS** |
-| `test_frame_convert` | [`test/test_frame_convert.c`](../test/test_frame_convert.c) | `driver/ad7490_driver.c` (§C, §D) | 7 | `LLR-AD7490-004`..`006`, `009`, `020`..`038` | **PASS** |
-| `test_device` | [`test/test_device.c`](../test/test_device.c) | `driver/ad7490_driver.c` (§Public, §A) | 9 | `LLR-AD7490-001`..`003`, `007`..`008`, `010`..`011`, `014`, `040`..`046` | **PASS** |
-| `test_sequencer` | [`test/test_sequencer.c`](../test/test_sequencer.c) | `driver/ad7490_driver.c` (§Public, §B) | 7 | `LLR-AD7490-012`..`013`, `015`, `050`..`054` | **PASS** |
-| `test_monitor` | [`test/test_monitor.c`](../test/test_monitor.c) | `driver/ad7490_monitor.c` (§Public, §A, §B) | 14 | `LLR-AD7490-060` .. `LLR-AD7490-081` | **PASS** |
+| Test Executable | Source File | Target Module Under Test | Test Functions | `CHECK` Results | Requirements Verified | Status |
+|:---|:---|:---|:---:|:---:|:---|:---:|
+| `test_qspi_hal` | [`test/test_qspi_hal.c`](../test/test_qspi_hal.c) | `hal/axi_qspi_hal.c` | 6 | 59 | `LLR-QSPI-001` .. `LLR-QSPI-031` | **PASS** |
+| `test_frame_convert` | [`test/test_frame_convert.c`](../test/test_frame_convert.c) | `driver/ad7490_driver.c` (§C, §D) | 7 | 835,642 | `LLR-AD7490-004`..`006`, `009`, `020`..`038` | **PASS** |
+| `test_device` | [`test/test_device.c`](../test/test_device.c) | `driver/ad7490_driver.c` (§Public, §A) | 10 (+1 helper) | 115 | `LLR-AD7490-001`..`003`, `007`..`008`, `010`..`011`, `014`, `040`..`048` | **PASS** |
+| `test_sequencer` | [`test/test_sequencer.c`](../test/test_sequencer.c) | `driver/ad7490_driver.c` (§Public, §B) | 6 (7 invocations) | 213 | `LLR-AD7490-012`..`013`, `015`, `050`..`054` | **PASS** |
+| `test_monitor` | [`test/test_monitor.c`](../test/test_monitor.c) | `driver/ad7490_monitor.c` (§Public, §A, §B) | 14 | 806 | `LLR-AD7490-060` .. `LLR-AD7490-081` | **PASS** |
+
+All 836,835 `CHECK` results pass and no `ASSERT` contract fails (`test_assert` count 0) in every suite.
 
 ---
 
@@ -56,7 +58,7 @@ Verification consists of two independent, automated stages:
    - Verifies `QSPI_HAL_ERR_HW` when `SPISR.MODF` asserts during a cycle.
 4. **`test_write_bytes()`**: Verifies parameter bounds (`NULL`, `0U`, `257U`), normal transmit cycle, bus timeout, and `MODF` hardware fault.
 5. **`test_read_bytes()`**: Verifies parameter bounds (`NULL`, `0U`, `257U`), normal receive cycle driving `dummy_tx_byte = 0xAAU` into `SPIDTR`, and timeout preservation of `p_rx_bytes`.
-6. **`test_drain_rx_fault()`**: Directly invokes `drain_rx_bytes()` with `SPISR.RX_EMPTY = 1` to verify the hardware fault abort branch (`QSPI_HAL_ERR_HW`).
+6. **`test_drain_rx_fault()`**: Directly invokes `drain_rx_bytes()` with `SPISR.RX_EMPTY = 1` to verify the hardware fault abort branch (`QSPI_HAL_ERR_HW`), confirming that the destination array is untouched when the fault hits the first byte. The partial case (fault on byte `i > 0`, where `LLR-QSPI-027` allows `p_rx_bytes[0 .. i-1]` to stay written) is not reachable in this suite: the host register model is plain RAM, so `SPISR.RX_EMPTY` cannot change between two iterations of the drain loop. Structurally it is the same branch (already covered), so it is not a coverage gap; it is a requirement-level scenario for hardware/software integration testing, where `SPISR` is a real register.
 
 ### 3.2 `test_frame_convert` (`driver/ad7490_driver.c` — Frame & Conversion Layers)
 1. **`test_cr_encoding()`**: Verifies exact 16-bit DIN frame encoding (`0x9710U`, `0x83E0U`, `0xFC80U`, `0xC000U`) across all `ad7490_seq_mode_t`, range, coding, power mode, and DOUT mode combinations.
@@ -74,9 +76,10 @@ Verification consists of two independent, automated stages:
 4. **`test_init_bus_errors()`**: Injects QSPI init hardware failure, timeout on dummy frame 2, and timeout on CR frame 3, confirming `AD7490_STATE_FAULT` on every error path.
 5. **`test_read_channel()`**: Verifies 2-frame pipelined single-channel read on `VIN5` (`DIN = 0x9710U` twice, `raw_lsb = 0x510`, `voltage_mv = 1582 mV`) followed immediately by `VIN12`.
 6. **`test_read_errors()`**: Verifies `NULL` arguments, `channel_id == 16U`, channel echo mismatch (`AD7490_ERR_CHAN_MISMATCH`), timeout on Frame 1, and timeout on Frame 2, confirming `p_sample` is untouched on all failures.
-7. **`test_power_modes()`**: Verifies transition to `FULL_SHUTDOWN` (1 frame `0x8210U`, subsequent reads blocked with `AD7490_ERR_STATE`), wake to `NORMAL` (2 frames: CR `0x8310U` + dummy read frame with `DIN = 0x00U`), and `AUTO_STANDBY`.
-8. **`test_power_mode_errors()`**: Verifies invalid enum (`4U`), `NULL` handle, timeout on the wakeup dummy frame transitions `dev.state` to `AD7490_STATE_FAULT`, and recovery via `ad7490_init()`.
-9. **`test_corrupted_handle()`**: Simulates Single-Event Upsets (SEU) in RAM: flipping 1 bit in `dev.state` (`^= 0x100U`), corrupting `range_mode = 5U`, and corrupting `vref_mv = 1U` inside a `READY` handle.
+7. **`test_power_modes()`**: Verifies transition to `FULL_SHUTDOWN` (1 frame `0x8210U`, subsequent reads blocked with `AD7490_ERR_STATE`), wake to `NORMAL` (2 frames: CR `0x8310U` + dummy read frame with `DIN = 0x00U`).
+8. **`test_auto_mode_reads()`**: For `AUTO_STANDBY` and `AUTO_SHUTDOWN` (AD7490 Fig. 14, 15): verifies the 3-frame read (CR write `0x8810U` / `0x8910U` selecting `VIN2`, then two `WRITE = 0` frames `0x0000U`), the correct **value** (`raw_lsb = 0x210`, `645 mV`, not only the channel echo, because the model returns invalid data with correct channel bits), a back-to-back read starting with the part asleep (`VIN7`, `0x710`), that the model really produced invalid dummy frames, and timeouts on the dummy frame and on the result frame (sample untouched, state stays `READY`).
+9. **`test_power_mode_errors()`**: Verifies invalid enum (`4U`), `NULL` handle, timeout on the wakeup dummy frame transitions `dev.state` to `AD7490_STATE_FAULT`, and recovery via `ad7490_init()`.
+10. **`test_corrupted_handle()`**: Simulates Single-Event Upsets (SEU) in RAM: flipping 1 bit in `dev.state` (`^= 0x100U`), corrupting `range_mode = 5U`, and corrupting `vref_mv = 1U` inside a `READY` handle.
 
 ### 3.4 `test_sequencer` (`driver/ad7490_driver.c` — Shadow Register Sequencer)
 1. **`test_start_and_scan(0U)` & `test_start_and_scan(1U)`**: Verifies 3-frame startup (`0x83B0U`, Shadow word `0xA001U` for `VIN0, VIN2, VIN15`, priming frame), 5 consecutive scan passes (confirming Frame 1 sends CR scrub word `0xC330U` and Frames 2..3 send `0x0000U`), and `ad7490_sequencer_stop()` returning to `AD7490_STATE_READY` for both `0` and `1` extra start-latency frames.
@@ -106,11 +109,53 @@ Verification consists of two independent, automated stages:
 
 ## 4. Structural Coverage & Rule Compliance Summary
 
-| Verification Metric | Target (DO-178C DAL A) | Achieved Result | Evidence / Tool |
-|:---|:---:|:---:|:---|
-| **Rule §0 Formatting (Allman, $\le 80$ cols, no `//`, LF)** | 100% | **100% (0 violations across 15 files)** | `make style` (`test/check_style.awk`) & `scripts/verify_compliance.*` |
-| **Rule §2 Naming (3..31 chars, no vague stems, no prefixes)** | 100% | **100% (0 violations)** | `scripts/verify_compliance.py` / `.ps1` |
-| **Rule §4 Function Metrics ($\le 100$ lines, $\le 5$ params, 1 `return`)** | 100% | **100% (max length: 84 lines)** | `scripts/verify_compliance.py` / `.ps1` |
-| **Bi-Directional Traceability (`@req` $\leftrightarrow$ `@design` $\leftrightarrow$ Docs)** | 100% | **100% (63 LLR IDs, 63 SDD IDs)** | `docs/TRACEABILITY_MATRIX.md` & `scripts/verify_compliance.*` |
-| **Statement / Line Coverage (`driver/`, `hal/`)** | 100% | **100%** | `make coverage` (`gcovr`) |
-| **Decision / Branch & MC/DC Coverage (`driver/`, `hal/`)** | 100% (excluding `ASSERT` failure branches & hardware-stuck-SS0 fault) | **100%** | `make coverage` (`gcovr --txt-metric branch`) |
+Measured on the host test build (`-O0 -g --coverage`). Line and branch coverage: GCC 13.3 + gcovr 8.8 (`make coverage`). MC/DC: GCC 14.2 `-fcondition-coverage` (masking MC/DC) + gcovr 8.8 (`make mcdc`). Figures below are the exact tool output; the uncovered items are justified in §5.
+
+### 4.1 Structural Coverage
+
+| File | Statement (Line) | Branch (`ASSERT` failure branches excluded) | MC/DC (condition outcomes) |
+|:---|:---:|:---:|:---:|
+| `driver/ad7490_driver.c` | 385 / 385 (**100%**) | 151 / 151 (**100%**) | 146 / 146 (**100%**) |
+| `driver/ad7490_monitor.c` | 173 / 173 (**100%**) | 96 / 96 (**100%**) | 96 / 96 (**100%**) |
+| `hal/axi_qspi_hal.c` | 185 / 186 (**99.5%**), missing line 667 | 71 / 72 (**98.6%**), missing line 664 | 71 / 72 (**98.6%**), line 664 condition 0 `true` |
+| **Total** | **743 / 744 (99.9%)** | **318 / 319 (99.7%)** | **313 / 314 (99.7%)** |
+
+Notes:
+- Branch coverage is identical with and without the `ASSERT` exclusion: in the test build `ASSERT(expr)` expands to a call of `test_assert()`, which adds no branch to the code under test.
+- Branch coverage counts object-code branch outcomes; it is **not** MC/DC. MC/DC is measured separately (last column). The production code contains 11 decisions with more than one condition (`ad7490_driver.c` 1, `ad7490_monitor.c` 5, `axi_qspi_hal.c` 5); all their conditions show independent effect in the MC/DC measurement.
+
+### 4.2 Rule Compliance
+
+| Verification Metric | Target | Measured Result | Evidence / Tool |
+|:---|:---:|:---|:---|
+| **Rule §0 Formatting (Allman incl. `else {` / `} else`, $\le 80$ cols, no `//`, no tabs, no trailing whitespace, LF, no relative `#include`, single trailing newline)** | 0 violations | 0 violations in the 15 `.c`/`.h` files of `hal/`, `driver/`, `test/` | `make style` (`test/check_style.awk`), `scripts/verify_compliance.*` |
+| **Rule §2 Naming (3..31 chars, no vague stems, no prefixes)** | 0 violations | 0 violations | `scripts/verify_compliance.py` / `.ps1` |
+| **Rule §4 Function Metrics ($\le 100$ lines, $\le 5$ params, single exit)** | 0 violations | 63 functions in `hal/`, `driver/`; longest `ad7490_sequencer_read_scan()` = 82 lines (signature to closing brace); max 5 parameters (`raw_to_mv()`, `scan_one()`); every non-`void` function has exactly one `return`, `void` functions have none | `scripts/verify_compliance.py` / `.ps1` |
+| **Bi-Directional Traceability (`@req` $\leftrightarrow$ `@design` $\leftrightarrow$ Docs)** | 0 orphans | 86 LLR IDs and 87 SDD IDs in code; 0 differences code $\leftrightarrow$ `LOW_LEVEL_REQUIREMENTS.md`, code $\leftrightarrow$ `TRACEABILITY_MATRIX.md`, code $\rightarrow$ `SOFTWARE_DESIGN_DESCRIPTION.md` §6 | `scripts/verify_compliance.*` |
+| **Deviation & Defensive Log cross-reference** | 0 orphans | 6 entries (3 `DEV-`, 3 `DEF-`), each named in the source comment of the element it documents and vice versa; 0 line-number references in the log | `scripts/verify_compliance.*` |
+| **Target build (Cortex-A53, rule §12 warning set, `-Werror`)** | 0 warnings | 0 warnings; worst stack frame 96 B (`scan_one()`) | `make target`, `make stack` |
+
+---
+
+## 5. Coverage Gaps & Justification
+
+| Location | Uncovered item | Why the host tests cannot reach it | Disposition |
+|:---|:---|:---|:---|
+| `hal/axi_qspi_hal.c:664`, line 667 (`run_bus_cycle()`) | Decision `0U == (ss_reg & QSPI_SPISSR_SS0_MASK)` never `true`; statement `result = QSPI_HAL_ERR_HW` (SS0 stuck low) never executed | The host register model is plain RAM: the read-back of `SPISSR` returns exactly the `0xFFFFFFFF` the HAL has just written, so a slave-select line stuck low cannot be represented. | Not dead code: hardware-fault detection required by `LLR-QSPI-026`. **Open item:** to be covered by a hardware/software integration test on the target (fault injection on SS0, or a register model with independent read-back). Until then, structural coverage of `axi_qspi_hal.c` is 99.5% statement / 98.6% branch and MC/DC. |
+
+No other statement, branch or condition is uncovered. The defensive branches `DEF-QSPI-001`, `DEF-AD7490-001` and `DEF-AD7490-002` are covered by direct fault-injection tests (see `DEVIATION_AND_DEFENSIVE_LOG.md`).
+
+---
+
+## 6. Reproducing These Results
+
+```bash
+make test       # 5 suites, PASS/FAIL and CHECK counts
+make coverage   # line + branch coverage (gcovr), HTML in build/coverage/
+make mcdc       # MC/DC condition coverage, needs gcc-14 / gcov-14
+make style      # rule 0 checks
+make target CROSS_COMPILE=aarch64-linux-gnu-
+make stack  CROSS_COMPILE=aarch64-linux-gnu-
+```
+
+Tool versions used for this report: GCC 13.3.0 (tests, line/branch), GCC 14.2.0 (MC/DC), gcovr 8.8, `aarch64-linux-gnu-gcc` 13.3 (target build). For DAL A certification credit the coverage tool chain must additionally be qualified or its results verified per DO-330 / DO-178C §12.2.
