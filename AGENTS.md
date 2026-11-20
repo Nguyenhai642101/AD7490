@@ -30,6 +30,8 @@ All code in this repository complies with **[`docs/C_rules_v3_addDO178C.md`](doc
 │   ├── ad7490_driver.c                    # AD7490 driver implementation (LLR-AD7490-001 .. LLR-AD7490-054)
 │   ├── ad7490_monitor.h                   # Public API for 1 ms periodic scan, 16-sample moving average, 3-retry fault recovery
 │   └── ad7490_monitor.c                   # Monitor implementation (LLR-AD7490-060 .. LLR-AD7490-081)
+├── examples/
+│   └── ad7490_scan16_raw.c                # Application example (not traced): 16-channel scan, 16-sample raw FIFO per channel
 ├── test/
 │   ├── check_style.awk                    # Automated Rule 0 & Allman style checker used by 'make style'
 │   ├── test_common.h, test_common.c       # Minimal host test harness & ASSERT contract hook

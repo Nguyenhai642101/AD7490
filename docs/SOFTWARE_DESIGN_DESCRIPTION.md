@@ -75,6 +75,7 @@ flowchart TD
   - **Completion Criterion:** Never polls `SPISR.Tx_Empty` (which asserts as soon as the last byte moves from the TX FIFO into the shift register while 8 `SCK` cycles are still in flight). Instead, polls `read_rx_count()` (`SDD-QSPI-3.12`) until `rx_count >= byte_count`, which occurs only after the final bit of the final byte has shifted in.
   - **Deterministic Timeout Bound:** Every poll iteration issues at least one AXI4-Lite read ($\ge 1\text{ ACLK} = 10\text{ ns}$ at $100\text{ MHz}$). Multiplying `timeout_us * 100U` (`QSPI_POLL_ITERS_PER_US`) guarantees that the loop waits *at least* `timeout_us` microseconds before timing out, with worst-case product $10^6 \times 100 = 10^8 < 2^{32}$ (zero unsigned wrap-around).
   - **Post-Cycle Hardware Verification:** Reads back `SPISSR` (flushing the posted deassert write and verifying `SS0` is physically high) and `SPISR` (verifying `MODF == 0`).
+- **`SDD-QSPI-3.6` (`reset_fifos`)**: Asserts `TX_RESET | RX_RESET` in `SPICR` while Master Inhibit is set, **holds them for `QSPI_RESET_SETTLE_READS` (32) AXI reads**, then clears them. The hold is required by the hardware and is not optional: with the two `SPICR` writes back to back the reset pulse is shorter than the IP reset pulse (16 ACLK) and the FIFO reset does not complete. Nothing observable reports this — the reset bits read back clear and both FIFOs read empty straight away — but the TX FIFO then silently drops the first byte written to `SPIDTR`, so the transfer ends as `QSPI_HAL_ERR_TIMEOUT` (RX never reaches `byte_count`). Measured on an AXI Quad SPI v3.2 (`ACLK = 100 MHz`, Frequency Ratio `16x1`, FIFO depth 256, 8-bit, 1 slave): one AXI read between the two writes already suffices, and a delay placed *after* the clearing write does not help, which identifies the pulse width — not the write spacing — as the constraint. The 32-read margin is the same constant the `SRR` reset uses (`SDD-QSPI-3.9`).
 - **`SDD-QSPI-3.8` .. `3.12`**: `drain_rx_bytes()`, `wait_reset_done()` (32 AXI reads of `SPICR` covering $2 \times 16\text{ ACLK}$ reset pulse), `load_tx_fifo_array()`, `load_tx_fifo_fill()`, and `read_rx_count()` (`(RXOCY & 0xFFU) + 1U` when `RX_EMPTY == 0`).
 
 ---
@@ -181,7 +182,7 @@ stateDiagram-v2
 
 | Module / Function | Loop Iteration Bound (Compile-Time Constant) | Hardware Bus Bound | Local Stack Buffer Size (`Rule §8 <= 64 B`) |
 |:---|:---|:---|:---|
-| `qspi_hal_init` | `QSPI_RESET_SETTLE_READS = 32` | 38 AXI4-Lite accesses | `0 B` (scalars only) |
+| `qspi_hal_init` | `QSPI_RESET_SETTLE_READS = 32` (twice: `SRR` + FIFO reset) | 70 AXI4-Lite accesses | `0 B` (scalars only) |
 | `qspi_hal_transceive_bytes` | `byte_count <= 256`, poll $\le 100 \times \text{timeout\_us}$ | 1 CS frame (`1..256 B`) | `0 B` (caller buffers) |
 | `ad7490_init` | `AD7490_POWER_UP_DUMMY_FRAMES = 2` | QSPI init + 3 frames (`6 B`) | `2 B` (`frame_bytes_t`) |
 | `ad7490_read_channel` | No loops | 2 frames `NORMAL` / 3 frames `AUTO_*` (`4..6 B`) | `2 B` (`frame_bytes_t`) |

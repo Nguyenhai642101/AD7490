@@ -117,8 +117,10 @@ Measured on the host test build (`-O0 -g --coverage`). Line and branch coverage:
 |:---|:---:|:---:|:---:|
 | `driver/ad7490_driver.c` | 385 / 385 (**100%**) | 151 / 151 (**100%**) | 146 / 146 (**100%**) |
 | `driver/ad7490_monitor.c` | 173 / 173 (**100%**) | 96 / 96 (**100%**) | 96 / 96 (**100%**) |
-| `hal/axi_qspi_hal.c` | 185 / 186 (**99.5%**), missing line 667 | 71 / 72 (**98.6%**), missing line 664 | 71 / 72 (**98.6%**), line 664 condition 0 `true` |
-| **Total** | **743 / 744 (99.9%)** | **318 / 319 (99.7%)** | **313 / 314 (99.7%)** |
+| `hal/axi_qspi_hal.c` | 188 / 189 (**99.5%**) | 73 / 74 (**98.6%**) | see note |
+| **Total** | **746 / 747 (99.9%)** | **320 / 321 (99.7%)** | see note |
+
+The single uncovered item in all three metrics is the same one: the `SS0`-stuck-low check of `run_bus_cycle()` (the `else if (0U == (ss_reg & QSPI_SPISSR_SS0_MASK))` decision and the `result = QSPI_HAL_ERR_HW` statement it guards), justified in §5. Items are named by element, not by line number, because a line number silently drifts on every edit above it; in the revision measured here they are lines 688 and 691. MC/DC was last measured at 313 / 314 before the `reset_fifos()` hold was added (`LLR-QSPI-025`); that loop adds one decision whose both outcomes the suites exercise, but the figure has **not** been re-measured with GCC 14 on this revision and is therefore not restated above.
 
 Notes:
 - Branch coverage is identical with and without the `ASSERT` exclusion: in the test build `ASSERT(expr)` expands to a call of `test_assert()`, which adds no branch to the code under test.
@@ -142,6 +144,8 @@ Notes:
 | Location | Uncovered item | Why the host tests cannot reach it | Disposition |
 |:---|:---|:---|:---|
 | `hal/axi_qspi_hal.c:664`, line 667 (`run_bus_cycle()`) | Decision `0U == (ss_reg & QSPI_SPISSR_SS0_MASK)` never `true`; statement `result = QSPI_HAL_ERR_HW` (SS0 stuck low) never executed | The host register model is plain RAM: the read-back of `SPISSR` returns exactly the `0xFFFFFFFF` the HAL has just written, so a slave-select line stuck low cannot be represented. | Not dead code: hardware-fault detection required by `LLR-QSPI-026`. **Open item:** to be covered by a hardware/software integration test on the target (fault injection on SS0, or a register model with independent read-back). Until then, structural coverage of `axi_qspi_hal.c` is 99.5% statement / 98.6% branch and MC/DC. |
+
+**Hardware timing constraints the host model cannot see.** The AXI Quad SPI register model of `test_qspi_hal.c` is plain host RAM, so timing requirements of the real IP are invisible to it. One was found during hardware/software integration and is now implemented in `reset_fifos()` (`LLR-QSPI-025`, `SDD-QSPI-3.6`): the TX/RX FIFO reset bits must stay asserted for at least the IP reset pulse (16 ACLK) before being cleared. With the two `SPICR` writes back to back the reset does not complete, the TX FIFO silently drops the first byte written to `SPIDTR` afterwards, and `qspi_hal_init()` fails with `QSPI_HAL_ERR_TIMEOUT` on its first frame. The host suites pass with **and** without the hold, so they cannot detect a regression of it; verifying this constraint is an open item for hardware/software integration testing, like the `SS0` case above.
 
 No other statement, branch or condition is uncovered. The defensive branches `DEF-QSPI-001`, `DEF-AD7490-001` and `DEF-AD7490-002` are covered by direct fault-injection tests (see `DEVIATION_AND_DEFENSIVE_LOG.md`).
 

@@ -72,6 +72,8 @@ flowchart TD
 │   ├── ad7490_driver.c                    # AD7490 driver implementation
 │   ├── ad7490_monitor.h                   # Public API for 1 ms periodic monitor & moving average
 │   └── ad7490_monitor.c                   # Periodic monitor & 3-attempt recovery implementation
+├── examples/
+│   └── ad7490_scan16_raw.c                # Example: 16-channel scan + 16-sample raw FIFO per channel
 ├── test/
 │   ├── check_style.awk                    # Automated Rule 0 & Allman brace checker
 │   ├── test_common.h, test_common.c       # Unit-test harness & ASSERT() contract hook
@@ -167,6 +169,64 @@ ad7490_status_t sensor_monitor_1ms_task(uint32_t * p_vin0_avg_mv,
     return status;
 }
 ```
+
+### 4.3 One Scan of All 16 Channels with a 16-Sample Raw FIFO per Channel
+
+Full example: [`examples/ad7490_scan16_raw.c`](examples/ad7490_scan16_raw.c).
+It keeps **raw codes** (`DOUT[11:0]`, `0..4095`), not millivolts, so the
+application can monitor and scale them itself. Per channel it holds the newest
+code plus a **16-deep FIFO**; every new code pushes the oldest one out. One
+`scan16_step()` runs one sequencer pass of 16 frames (~41 us at `SCK = 6.25 MHz`),
+so calling it every 1 ms is comfortable.
+
+```c
+#include "ad7490_driver.h"
+
+static scan16_state_t g_scan;          /* ~1 kB: never on the stack */
+
+void app_init(void)
+{
+    ad7490_config_t const cfg = { /* as in 4.1 */ };
+
+    if (AD7490_OK != scan16_start(&g_scan, &cfg))
+    {
+        /* ADC power-up or sequencer start failed */
+    }
+}
+
+void task_1ms(void)                    /* periodic task, NOT an ISR */
+{
+    if (AD7490_OK != scan16_step(&g_scan))
+    {
+        /* Failed pass: every FIFO was emptied, so no mean mixes
+           samples from before and after the fault. Recover with
+           scan16_start(). */
+    }
+}
+
+void app_monitor(void)
+{
+    uint16_t raw_lsb[AD7490_CHANNEL_COUNT] = { 0U };
+    uint16_t window_raw[16] = { 0U };
+    uint16_t avg_raw = 0U;
+    size_t   fill_count = 0U;
+
+    /* Newest code of every channel, indexed by channel ID */
+    (void)scan16_get_last_raw(&g_scan, raw_lsb, AD7490_CHANNEL_COUNT);
+
+    /* Mean of the codes currently in VIN5's FIFO (1..16 samples) */
+    (void)scan16_get_avg_raw(&g_scan, 5U, &avg_raw, &fill_count);
+
+    /* The whole FIFO of VIN5, oldest code first */
+    (void)scan16_get_window(&g_scan, 5U, window_raw, 16U, &fill_count);
+}
+```
+
+The mean covers only the codes actually stored, so the first 15 scans are not
+diluted by empty slots. To get millivolts at the pin from a code, use the same
+scaling the driver uses: `voltage_mv = (raw_lsb * span_mv + 2048) / 4096`, with
+`span_mv = 2 x vref_mv` (`RANGE = 0`) or `vref_mv` (`RANGE = 1`). Multiply by
+your divider ratio afterwards if the input is attenuated.
 
 ---
 

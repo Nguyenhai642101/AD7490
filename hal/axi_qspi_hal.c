@@ -502,6 +502,20 @@ static bool wait_reset_done(uintptr_t base_addr)
  * @param[in]   ctrl_inhibit  SPICR word with Master Inhibit set.
  * @note        Leaves SS0 deasserted; it is asserted only in
  *              run_bus_cycle() so the CS-low window encloses SCK only.
+ *              The reset bits must stay asserted for at least the IP
+ *              reset pulse before they are cleared: clearing them in
+ *              the very next AXI write makes the pulse shorter than
+ *              16 ACLK and the FIFO reset does not complete. The IP
+ *              signals nothing about this - the reset bits read back
+ *              clear and both FIFOs read empty immediately - and the
+ *              only visible effect is that the FIFO silently drops the
+ *              first byte written to SPIDTR afterwards, which
+ *              run_bus_cycle() then reports as QSPI_HAL_ERR_TIMEOUT.
+ *              Measured on hardware (AXI Quad SPI v3.2, ACLK 100 MHz,
+ *              Frequency Ratio 16x1): a single AXI read between the
+ *              two writes is already enough; this code keeps the same
+ *              QSPI_RESET_SETTLE_READS margin as the SRR reset.
+ *              WCET: 2 AXI writes + QSPI_RESET_SETTLE_READS reads.
  */
 static void reset_fifos(uintptr_t base_addr,
                         uint32_t ctrl_inhibit)
@@ -509,10 +523,17 @@ static void reset_fifos(uintptr_t base_addr,
     uint32_t ctrl_reset = ctrl_inhibit
                           | QSPI_SPICR_TX_RESET_MASK
                           | QSPI_SPICR_RX_RESET_MASK;
+    size_t i = 0U;
 
     ASSERT(0U != base_addr);
 
     reg_write32(base_addr, QSPI_REG_SPICR_OFFSET, ctrl_reset);
+
+    for (i = 0U; i < QSPI_RESET_SETTLE_READS; i++)
+    {
+        (void)reg_read32(base_addr, QSPI_REG_SPICR_OFFSET);
+    }
+
     reg_write32(base_addr, QSPI_REG_SPICR_OFFSET, ctrl_inhibit);
 }
 

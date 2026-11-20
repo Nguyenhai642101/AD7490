@@ -59,7 +59,8 @@ TEST_BINS    := $(addprefix $(HOST_DIR)/,$(TEST_NAMES))
 TEST_SUPPORT := $(HOST_DIR)/test_common.o $(HOST_DIR)/fake_ad7490.o
 HOST_DRIVER  := $(HOST_DIR)/ad7490_driver.o
 
-STYLE_FILES := $(wildcard hal/*.[ch] driver/*.[ch] test/*.[ch])
+STYLE_FILES := $(wildcard hal/*.[ch] driver/*.[ch] test/*.[ch] \
+                         examples/*.[ch])
 
 .PHONY: all target stack test coverage mcdc style clean
 

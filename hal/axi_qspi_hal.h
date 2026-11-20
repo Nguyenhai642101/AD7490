@@ -99,7 +99,7 @@ typedef struct
  * @param[in]   p_cfg  Pointer to QSPI HAL configuration, must not be NULL.
  * @return      QSPI_HAL_OK, QSPI_HAL_ERR_PARAM, QSPI_HAL_ERR_HW.
  * @note        Not ISR-safe. Not reentrant on the same base_addr.
- *              Blocking. WCET bound: 38 AXI register accesses.
+ *              Blocking. WCET bound: 70 AXI register accesses.
  *              QSPI_HAL_ERR_HW: core did not return to its PG153 reset
  *              state, or a mode fault (MODF) was flagged.
  */
