@@ -193,6 +193,10 @@ typedef struct
  * 16 SCLK x 160 ns (SCK 6.25 MHz) = 2.56 us, rounded up. */
 #define AD7490_MIN_TIMEOUT_US       (3U)
 
+/* Largest poll_timeout_us per 2-byte frame: keeps a 22-frame
+ * recovery pass bounded within a 1 ms periodic task budget. */
+#define AD7490_MAX_TIMEOUT_US       (100U)
+
 /**
  * @brief       Power up the AD7490 and load its Control Register.
  * @req         LLR-AD7490-010
@@ -200,8 +204,8 @@ typedef struct
  * @param[out]  p_dev  Device handle to initialise, must not be NULL.
  * @param[in]   p_cfg  Configuration, must not be NULL; copied into p_dev.
  *                     vref_mv 2475..2525, qspi_cfg.clock_mode =
- *                     AD7490_QSPI_CLOCK_MODE, qspi_cfg.poll_timeout_us >=
- *                     AD7490_MIN_TIMEOUT_US.
+ *                     AD7490_QSPI_CLOCK_MODE, qspi_cfg.poll_timeout_us
+ *                     in AD7490_MIN_TIMEOUT_US..AD7490_MAX_TIMEOUT_US.
  * @return      AD7490_OK, AD7490_ERR_PARAM, AD7490_ERR_SPI,
  *              AD7490_ERR_TIMEOUT.
  * @note        Not ISR-safe. Not reentrant on the same p_dev or QSPI
@@ -218,25 +222,27 @@ ad7490_status_t ad7490_init(ad7490_dev_t * p_dev,
  * @brief       Convert one analog input channel (VIN0..VIN15).
  * @req         LLR-AD7490-011
  * @design      SDD-AD7490-2.2
- * @param[in]   p_dev       Initialised device handle, must not be NULL.
- * @param[in]   channel_id  Channel to convert, 0..15.
- * @param[out]  p_sample    Result, must not be NULL; written only on
- *                          AD7490_OK. voltage_mv in mV at the VINx pin.
+ * @param[in,out] p_dev       Initialised device handle, must not be NULL.
+ * @param[in]     channel_id  Channel to convert, 0..15.
+ * @param[out]    p_sample    Result, must not be NULL; written only on
+ *                            AD7490_OK. voltage_mv in mV at the VINx pin.
  * @return      AD7490_OK, AD7490_ERR_PARAM, AD7490_ERR_STATE,
  *              AD7490_ERR_SPI, AD7490_ERR_TIMEOUT,
  *              AD7490_ERR_CHAN_MISMATCH.
- * @note        Not ISR-safe. Not reentrant on the same QSPI instance.
- *              Blocking. Frame 1 writes ADD3..ADD0. NORMAL mode: frame 2
- *              converts channel_id (WCET 2 frames). AUTO_STANDBY /
- *              AUTO_SHUTDOWN: the part sleeps after the CR write, so
- *              frame 2 is a power-up dummy (WRITE = 0, result discarded)
- *              and frame 3 converts channel_id (WCET 3 frames, Fig 14,
- *              15). The channel ID echoed in DOUT is checked against
- *              channel_id.
+ * @note        Not ISR-safe. Not reentrant on the same p_dev or QSPI
+ *              instance. Blocking. Frame 1 writes ADD3..ADD0. NORMAL
+ *              mode: frame 2 converts channel_id (WCET 2 frames).
+ *              AUTO_STANDBY / AUTO_SHUTDOWN: the part sleeps after the
+ *              CR write, so frame 2 is a power-up dummy (WRITE = 0,
+ *              result discarded) and frame 3 converts channel_id (WCET
+ *              3 frames, Fig 14, 15). The channel ID echoed in DOUT is
+ *              checked against channel_id. Any bus error, channel echo
+ *              mismatch or handle corruption sets p_dev->state to
+ *              AD7490_STATE_FAULT (call ad7490_init() to recover).
  *              AD7490_ERR_STATE: not initialised, sequencer active or
  *              FULL_SHUTDOWN power mode.
  */
-ad7490_status_t ad7490_read_channel(ad7490_dev_t const * p_dev,
+ad7490_status_t ad7490_read_channel(ad7490_dev_t * p_dev,
                                     uint8_t channel_id,
                                     ad7490_sample_t * p_sample);
 
@@ -249,10 +255,12 @@ ad7490_status_t ad7490_read_channel(ad7490_dev_t const * p_dev,
  * @return      AD7490_OK, AD7490_ERR_PARAM, AD7490_ERR_STATE,
  *              AD7490_ERR_SPI, AD7490_ERR_TIMEOUT.
  * @note        Not ISR-safe. Not reentrant on the same p_dev. Blocking,
- *              WCET: 2 frames. Any mode other than FULL_SHUTDOWN is
- *              followed by one dummy frame (2.56 us) that covers the
- *              1 us power-up time. If a frame fails, the ADC power mode
- *              is unknown and p_dev->state becomes AD7490_STATE_FAULT:
+ *              WCET: 2 frames. Entering NORMAL mode is followed by one
+ *              dummy frame (2.56 us) that covers the 1 us power-up time;
+ *              low-power modes (FULL_SHUTDOWN, AUTO_STANDBY,
+ *              AUTO_SHUTDOWN) send only the CR write so the part stays
+ *              powered down. If a frame fails, the ADC power mode is
+ *              unknown and p_dev->state becomes AD7490_STATE_FAULT:
  *              call ad7490_init() to recover.
  */
 ad7490_status_t ad7490_set_power_mode(ad7490_dev_t * p_dev,
@@ -269,8 +277,14 @@ ad7490_status_t ad7490_set_power_mode(ad7490_dev_t * p_dev,
  *              AD7490_ERR_SPI, AD7490_ERR_TIMEOUT.
  * @note        Not ISR-safe. Not reentrant on the same p_dev. Blocking,
  *              WCET: 3 frames. Requires power mode NORMAL (ERR_STATE
- *              otherwise). Success: state SEQUENCING. Bus error: state
- *              FAULT, call ad7490_init() to recover.
+ *              otherwise). Frame 3 is a priming frame (WRITE = 0) that
+ *              absorbs any 0..1 frame sequencer start latency; on
+ *              0-latency hardware (Fig 18 point C) it advances the ring
+ *              past the lowest selected channel (C_0), so each
+ *              ad7490_sequencer_read_scan() pass samples the ring in
+ *              cyclic order (C_1 .. C_{N-1}, C_0) and stores results at
+ *              p_samples[channel_id]. Success: state SEQUENCING. Bus
+ *              error: state FAULT, call ad7490_init() to recover.
  */
 ad7490_status_t ad7490_sequencer_start(ad7490_dev_t * p_dev,
                                        uint16_t channel_mask);
@@ -282,7 +296,8 @@ ad7490_status_t ad7490_sequencer_start(ad7490_dev_t * p_dev,
  * @param[in,out] p_dev         SEQUENCING device handle, not NULL.
  * @param[out]    p_samples     Array indexed by channel ID, not NULL.
  *                              Only entries of sequenced channels are
- *                              written, and only on AD7490_OK.
+ *                              touched; valid only on AD7490_OK (see
+ *                              @note).
  * @param[in]     sample_count  Capacity of p_samples, >= 16.
  * @return      AD7490_OK, AD7490_ERR_PARAM, AD7490_ERR_STATE,
  *              AD7490_ERR_SPI, AD7490_ERR_TIMEOUT,

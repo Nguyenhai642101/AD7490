@@ -23,7 +23,7 @@ Every defensive branch required by MISRA C:2012 (`[M 15.7]` final `else`, `[M 16
 | Defensive ID | Element (file, `LLR` / `SDD`) | Guarded Fault | Verification Method |
 |:---|:---|:---|:---|
 | `DEF-QSPI-001` | Final `else` of `build_control_word()` in `hal/axi_qspi_hal.c` (`LLR-QSPI-024`, `SDD-QSPI-3.5`) | RAM bit-flip corrupting validated `clock_mode` (`mode_idx >= QSPI_CLOCK_MODE_COUNT`). | Unit test `test_qspi_hal.c:test_init_sequence_and_faults()` calls `build_control_word((qspi_clock_mode_t)4U)` and verifies safe fallback to base control word. |
-| `DEF-AD7490-001` | Final `else` of `encode_cr_word()` in `driver/ad7490_driver.c` (`LLR-AD7490-030`, `SDD-AD7490-3.11`) | RAM bit-flip corrupting internal `seq_mode` (`seq_idx >= AD7490_SEQ_MODE_COUNT`). | Unit test `test_frame_convert.c:test_cr_rejects_bad_enum()` calls `encode_cr_word(&good, 0U, (ad7490_seq_mode_t)4U)` and verifies safe fallback (`SEQ=0, SHADOW=0`). |
+| `DEF-AD7490-001` | Final `else` of `encode_cr_word()` in `driver/ad7490_driver.c` (`LLR-AD7490-030`, `SDD-AD7490-3.11`) | RAM bit-flip corrupting internal `seq_mode` (`seq_idx >= AD7490_SEQ_MODE_COUNT`). | Unit test `test_frame_convert.c:test_cr_rejects_bad_enum()` calls `encode_cr_word(&good, 0U, (ad7490_seq_mode_t)AD7490_SEQ_MODE_COUNT)` and verifies safe fallback (`SEQ=0, SHADOW=0`). |
 | `DEF-AD7490-002` | `switch` `default:` of `map_hal_status()` in `driver/ad7490_driver.c` (`LLR-AD7490-034`, `SDD-AD7490-3.15`) | RAM/register bit-flip producing an undefined `qspi_hal_status_t` enum value in `switch (hal_status)`. | Unit test `test_frame_convert.c:test_hal_status_map()` injects `(qspi_hal_status_t)9U` and verifies fail-safe mapping to `AD7490_ERR_SPI`. |
 
 ---

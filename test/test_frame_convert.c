@@ -70,13 +70,13 @@ static void test_cr_encoding(void)
                                       AD7490_SEQ_MODE_LOAD_SHADOW, &frame));
     CHECK(0x83E0U == frame);
 
-    /* CONSECUTIVE to VIN15, auto standby: CR 0xFC8 */
+    /* SINGLE on VIN15, auto standby: CR 0xBC0 -> DIN 0xBC00 */
     ctrl.power_mode = AD7490_POWER_AUTO_STANDBY;
     ctrl.range_mode = AD7490_RANGE_2X_VREF;
     ctrl.dout_mode = AD7490_DOUT_TRI_STATE;
     CHECK(AD7490_OK == build_cr_frame(&ctrl, 15U,
-                                      AD7490_SEQ_MODE_CONSECUTIVE, &frame));
-    CHECK(0xFC80U == frame);
+                                      AD7490_SEQ_MODE_SINGLE, &frame));
+    CHECK(0xBC00U == frame);
 
     /* KEEP_SEQ: SEQ bit only */
     CHECK(AD7490_OK == build_cr_frame(&ctrl, 0U,
@@ -114,7 +114,7 @@ static void test_cr_rejects_bad_enum(void)
                                              AD7490_SEQ_MODE_SINGLE, &frame));
     CHECK(0x1234U == frame);
 
-    /* Defensive branch in encode_cr_word when seq_mode >= 4 */
+    /* Defensive branch in encode_cr_word when seq_mode >= 3 */
     CHECK(0x830U == encode_cr_word(&good,
                                    0U,
                                    (ad7490_seq_mode_t)AD7490_SEQ_MODE_COUNT));

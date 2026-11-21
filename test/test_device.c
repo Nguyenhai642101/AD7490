@@ -113,6 +113,9 @@ static void test_init_rejects_bad_config(void)
     bad.qspi_cfg.poll_timeout_us = AD7490_MIN_TIMEOUT_US - 1U;
     CHECK(AD7490_ERR_PARAM == ad7490_init(&dev, &bad));
     bad = cfg;
+    bad.qspi_cfg.poll_timeout_us = AD7490_MAX_TIMEOUT_US + 1U;
+    CHECK(AD7490_ERR_PARAM == ad7490_init(&dev, &bad));
+    bad = cfg;
     bad.ctrl_cfg.coding = (ad7490_coding_t)7U;
     CHECK(AD7490_ERR_PARAM == ad7490_init(&dev, &bad));
 
@@ -209,22 +212,26 @@ static void test_read_errors(void)
     CHECK(AD7490_ERR_CHAN_MISMATCH == ad7490_read_channel(&dev, 3U,
                                                           &sample));
     fake_bad_echo_frame(0U);
+    CHECK(AD7490_STATE_FAULT == dev.state);
+    CHECK(AD7490_OK == ad7490_init(&dev, &cfg));
 
     fake_clear_frame_count();
     fake_fail_frame(1U);
     CHECK(AD7490_ERR_TIMEOUT == ad7490_read_channel(&dev, 3U, &sample));
     CHECK(1U == fake_frame_count());
+    CHECK(AD7490_STATE_FAULT == dev.state);
+    CHECK(AD7490_OK == ad7490_init(&dev, &cfg));
 
     fake_clear_frame_count();
     fake_fail_frame(2U);
     CHECK(AD7490_ERR_TIMEOUT == ad7490_read_channel(&dev, 3U, &sample));
     fake_fail_frame(0U);
 
-    /* Output untouched by every failure; read errors keep READY */
+    /* Output untouched by every failure; bus/echo errors latch FAULT */
     CHECK(99U == sample.channel_id);
     CHECK(9999U == sample.raw_lsb);
     CHECK(9999U == sample.voltage_mv);
-    CHECK(AD7490_STATE_READY == dev.state);
+    CHECK(AD7490_STATE_FAULT == dev.state);
 }
 
 
@@ -272,7 +279,10 @@ static void check_auto_mode_reads(ad7490_power_mode_t power_mode,
 
     reset_model();
     CHECK(AD7490_OK == ad7490_init(&dev, &cfg));
+    fake_clear_frame_count();
     CHECK(AD7490_OK == ad7490_set_power_mode(&dev, power_mode));
+    CHECK(1U == fake_frame_count());
+    CHECK(!fake_adc_is_powered());
 
     /* 3 frames: CR write (select), dummy WRITE=0, valid WRITE=0 */
     fake_clear_frame_count();
@@ -294,18 +304,21 @@ static void check_auto_mode_reads(ad7490_power_mode_t power_mode,
     /* The model really produced invalid frames, none was returned */
     CHECK(0U < fake_adc_invalid_count());
 
-    /* Bus error on the dummy frame or on the result frame */
+    /* Bus error on the dummy frame or on the result frame -> FAULT */
     sample.raw_lsb = 9999U;
     fake_clear_frame_count();
     fake_fail_frame(2U);
     CHECK(AD7490_ERR_TIMEOUT == ad7490_read_channel(&dev, 3U, &sample));
     CHECK(2U == fake_frame_count());
+    CHECK(AD7490_STATE_FAULT == dev.state);
+    CHECK(AD7490_OK == ad7490_init(&dev, &cfg));
+    CHECK(AD7490_OK == ad7490_set_power_mode(&dev, power_mode));
     fake_clear_frame_count();
     fake_fail_frame(3U);
     CHECK(AD7490_ERR_TIMEOUT == ad7490_read_channel(&dev, 3U, &sample));
     fake_fail_frame(0U);
     CHECK(9999U == sample.raw_lsb);
-    CHECK(AD7490_STATE_READY == dev.state);
+    CHECK(AD7490_STATE_FAULT == dev.state);
 }
 
 
@@ -358,11 +371,13 @@ static void test_corrupted_handle(void)
     CHECK(AD7490_ERR_STATE == ad7490_read_channel(&dev, 0U, &sample));
     dev.state ^= 0x00000100U;
 
-    /* Out-of-range enum inside a READY handle: PARAM, no frame */
+    /* Out-of-range enum inside a READY handle: PARAM, no frame, FAULT */
     dev.cfg.ctrl_cfg.range_mode = (ad7490_range_t)5U;
     fake_clear_frame_count();
     CHECK(AD7490_ERR_PARAM == ad7490_read_channel(&dev, 0U, &sample));
     CHECK(0U == fake_frame_count());
+    CHECK(AD7490_STATE_FAULT == dev.state);
+    dev.state = AD7490_STATE_READY;
     CHECK(AD7490_ERR_PARAM == ad7490_set_power_mode(&dev,
                                                     AD7490_POWER_NORMAL));
     CHECK(AD7490_STATE_FAULT == dev.state);
@@ -372,4 +387,5 @@ static void test_corrupted_handle(void)
     CHECK(AD7490_OK == ad7490_init(&dev, &cfg));
     dev.cfg.vref_mv = 1U;
     CHECK(AD7490_ERR_PARAM == ad7490_read_channel(&dev, 4U, &sample));
+    CHECK(AD7490_STATE_FAULT == dev.state);
 }

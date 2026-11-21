@@ -58,8 +58,11 @@ typedef enum
  * @req         LLR-QSPI-004
  * @design      SDD-QSPI-1.3
  * @note        poll_timeout_us is a guaranteed MINIMUM busy-wait per
- *              transfer. One byte shifts in 8 bit * 16 ACLK = 1.28 us, so
- *              a full 256-byte frame needs poll_timeout_us >= 328.
+ *              transfer (100 poll reads/us assumes >= 1 ACLK per read;
+ *              typical PS-to-PL AXI4-Lite latency of 10..25 ACLK makes
+ *              the actual wall-clock timeout 10x..25x longer). One byte
+ *              shifts in 8 bit * 16 ACLK = 1.28 us, so a full 256-byte
+ *              frame needs poll_timeout_us >= 328.
  */
 typedef struct
 {
@@ -99,7 +102,7 @@ typedef struct
  * @param[in]   p_cfg  Pointer to QSPI HAL configuration, must not be NULL.
  * @return      QSPI_HAL_OK, QSPI_HAL_ERR_PARAM, QSPI_HAL_ERR_HW.
  * @note        Not ISR-safe. Not reentrant on the same base_addr.
- *              Blocking. WCET bound: 70 AXI register accesses.
+ *              Blocking. WCET bound: 42 AXI register accesses.
  *              QSPI_HAL_ERR_HW: core did not return to its PG153 reset
  *              state, or a mode fault (MODF) was flagged.
  */

@@ -489,10 +489,10 @@ static void avg_reset(ad7490_avg_t * p_avg)
  * @design      SDD-AD7490-6.2
  * @param[in,out] p_avg      Window.
  * @param[in]     sample_mv  New sample from the driver, mV, 0..5050.
- * @return      AD7490_OK, AD7490_ERR_STATE (index fields corrupted:
- *              window unchanged, caller resets it).
- * @note        O(1). Ring buffer: the slot after the newest sample
- *              always holds the oldest one.
+ * @return      AD7490_OK, AD7490_ERR_STATE (index fields or active slot
+ *              corrupted: window unchanged, caller resets it).
+ * @note        WCET: 16 iterations. Ring buffer: the slot after the
+ *              newest sample always holds the oldest one.
  */
 static ad7490_status_t avg_push(ad7490_avg_t * p_avg,
                                 uint32_t sample_mv)
@@ -559,39 +559,22 @@ static ad7490_status_t avg_get_mv(ad7490_avg_t const * p_avg,
     else
     {
         /*
-         * Slots 0..fill_count-1 are valid: the window fills from slot 0
-         * after a reset and is entirely valid once full.
-         * Sum <= 16 * 5050 = 80800 < 2^32 when every slot is in range.
+         * Slots 0..fill_count-1 are valid and <= 5050 mV (verified by
+         * is_window_consistent): sum <= 16 * 5050 = 80800 < 2^32.
          */
         uint32_t sum_mv = 0U;
         uint32_t sample_total = (uint32_t)p_avg->fill_count;
+        uint32_t half_step = sample_total / AD7490_MON_ROUND_DIVISOR;
         size_t i = 0U;
 
         for (i = 0U; i < p_avg->fill_count; i++)
         {
-            if (p_avg->window_mv[i] > AD7490_VOLTAGE_MAX_MV)
-            {
-                /* Corrupted slot (SEU): keeps the sum from wrapping */
-                result = AD7490_ERR_STATE;
-            }
-            else
-            {
-                sum_mv += p_avg->window_mv[i];
-            }
+            sum_mv += p_avg->window_mv[i];
         }
 
-        if (AD7490_OK == result)
-        {
-            /* Round to nearest; sample_total is 1..16, never 0 here */
-            uint32_t half_step = sample_total / AD7490_MON_ROUND_DIVISOR;
-
-            *p_avg_mv = (sum_mv + half_step) / sample_total;
-            *p_fill_count = p_avg->fill_count;
-        }
-        else
-        {
-            /* Corrupted window: outputs left untouched */
-        }
+        /* Round to nearest; sample_total is 1..16, never 0 here */
+        *p_avg_mv = (sum_mv + half_step) / sample_total;
+        *p_fill_count = p_avg->fill_count;
     }
 
     return result;
@@ -599,13 +582,15 @@ static ad7490_status_t avg_get_mv(ad7490_avg_t const * p_avg,
 
 
 /**
- * @brief       Check the index fields of a window against its invariants.
+ * @brief       Check the index fields and active slots of a window.
  * @req         LLR-AD7490-063
  * @design      SDD-AD7490-6.4
  * @param[in]   p_avg  Window.
- * @return      true if next_idx and fill_count are mutually consistent.
- * @note        Invariants: next_idx < 16, fill_count <= 16, and while not
- *              full next_idx == fill_count. One condition per decision.
+ * @return      true if indices and active slots satisfy all invariants.
+ * @note        Invariants: next_idx < 16, fill_count <= 16, while not
+ *              full next_idx == fill_count, and every active slot
+ *              window_mv[0..fill_count-1] <= AD7490_VOLTAGE_MAX_MV.
+ *              One condition per decision. WCET: 16 iterations.
  */
 static bool is_window_consistent(ad7490_avg_t const * p_avg)
 {
@@ -633,6 +618,28 @@ static bool is_window_consistent(ad7490_avg_t const * p_avg)
     else
     {
         is_ok = true;
+    }
+
+    if (is_ok)
+    {
+        size_t i = 0U;
+
+        for (i = 0U; i < p_avg->fill_count; i++)
+        {
+            if (p_avg->window_mv[i] > AD7490_VOLTAGE_MAX_MV)
+            {
+                /* Corrupted slot (SEU): reject before sum or push */
+                is_ok = false;
+            }
+            else
+            {
+                /* Active slot within valid voltage range */
+            }
+        }
+    }
+    else
+    {
+        /* Index invariant already failed */
     }
 
     return is_ok;

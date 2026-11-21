@@ -176,10 +176,11 @@ static void test_window_corruption(void)
     window.next_idx = 3U;
     CHECK(AD7490_ERR_STATE == avg_get_mv(&window, &avg_mv, &fill_count));
 
-    /* Corrupted slot: error, outputs untouched, no sum wrap */
+    /* Corrupted slot: error on push and read, outputs untouched */
     avg_reset(&window);
     (void)avg_push(&window, 1U);
     window.window_mv[0] = 0xFFFFFFF0U;
+    CHECK(AD7490_ERR_STATE == avg_push(&window, 1U));
     CHECK(AD7490_ERR_STATE == avg_get_mv(&window, &avg_mv, &fill_count));
     CHECK(7U == avg_mv);
 }
@@ -502,7 +503,7 @@ static void test_corrupted_state(void)
     CHECK(AD7490_OK == ad7490_monitor_step(&g_mon));
     CHECK(0x0003U == g_mon.dev.channel_mask);
 
-    /* Window corrupted: push fails, every window restarts */
+    /* Window index or slot corrupted: push fails, every window resets */
     g_mon.avg[0].next_idx = 99U;
     CHECK(AD7490_ERR_STATE == ad7490_monitor_step(&g_mon));
     CHECK(AD7490_ERR_STATE == ad7490_monitor_get_avg(&g_mon, 1U, &avg_mv,
@@ -511,6 +512,9 @@ static void test_corrupted_state(void)
     CHECK(AD7490_OK == ad7490_monitor_get_avg(&g_mon, 0U, &avg_mv,
                                               &fill_count));
     CHECK(1U == fill_count);
+    g_mon.avg[0].window_mv[0] = 0xFFFFFFF0U;
+    CHECK(AD7490_ERR_STATE == ad7490_monitor_step(&g_mon));
+    CHECK(AD7490_OK == ad7490_monitor_step(&g_mon));
 
     /* Health word corrupted: fail safe */
     g_mon.health ^= 0x00010000U;

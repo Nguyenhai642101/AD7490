@@ -33,10 +33,11 @@ MCDC_DIR := build/mcdc
 INC := -Ihal -Idriver
 
 # Rule 12: mandatory warnings, qualified optimisation profile (DAL A/B)
-WARN := -std=c99 -pedantic-errors -Wall -Wextra -Werror -Wconversion \
-        -Wsign-conversion -Wshadow -Wstrict-prototypes \
-        -Wmissing-prototypes -Wundef -Wcast-qual -Wcast-align=strict \
-        -Wvla -Wstack-usage=256 -fno-common
+COMMON_WARN := -std=c99 -pedantic-errors -Wall -Wextra -Werror \
+               -Wconversion -Wsign-conversion -Wshadow \
+               -Wstrict-prototypes -Wmissing-prototypes -Wundef \
+               -Wcast-qual -Wcast-align=strict -Wvla -fno-common
+WARN := $(COMMON_WARN) -Wstack-usage=256
 OPT  := -O1 -fno-inline
 
 TARGET_CFLAGS := $(WARN) $(OPT) $(TARGET_ARCH) -ffreestanding \
@@ -45,13 +46,14 @@ TARGET_CFLAGS := $(WARN) $(OPT) $(TARGET_ARCH) -ffreestanding \
 # Host tests: a failed ASSERT counts as a test failure (test_common.h)
 TEST_ASSERT := -D'ASSERT(expr)=test_assert((expr), (uint32_t)__LINE__)'
 TEST_EXTRA  ?=
-TEST_CFLAGS := -std=c99 -Wall -Wextra -Werror -O0 -g --coverage \
+TEST_CFLAGS := $(COMMON_WARN) -O0 -g --coverage \
                $(INC) -Itest -include test/test_common.h $(TEST_ASSERT) \
                $(TEST_EXTRA)
 
-A53_OBJS := $(A53_DIR)/axi_qspi_hal.o $(A53_DIR)/ad7490_driver.o \
-            $(A53_DIR)/ad7490_monitor.o
-A53_LIB  := $(A53_DIR)/libad7490.a
+A53_OBJS    := $(A53_DIR)/axi_qspi_hal.o $(A53_DIR)/ad7490_driver.o \
+               $(A53_DIR)/ad7490_monitor.o
+A53_EXAMPLE := $(A53_DIR)/ad7490_scan16_raw.o
+A53_LIB     := $(A53_DIR)/libad7490.a
 
 TEST_NAMES   := test_qspi_hal test_frame_convert test_device \
                 test_sequencer test_monitor
@@ -68,7 +70,7 @@ all: target test style
 
 # --------------------------- target (Cortex-A53) ---------------------------
 
-target: $(A53_LIB)
+target: $(A53_LIB) $(A53_EXAMPLE)
 
 $(A53_LIB): $(A53_OBJS)
 	$(TARGET_AR) rcs $@ $^
@@ -77,8 +79,12 @@ $(A53_LIB): $(A53_OBJS)
 $(A53_DIR)/%.o: hal/%.c hal/axi_qspi_hal.h | $(A53_DIR)
 	$(TARGET_CC) $(TARGET_CFLAGS) -c $< -o $@
 
-$(A53_DIR)/%.o: driver/%.c driver/ad7490_driver.h \
+$(A53_DIR)/%.o: driver/%.c hal/axi_qspi_hal.h driver/ad7490_driver.h \
                 driver/ad7490_monitor.h | $(A53_DIR)
+	$(TARGET_CC) $(TARGET_CFLAGS) -c $< -o $@
+
+$(A53_DIR)/%.o: examples/%.c hal/axi_qspi_hal.h \
+                driver/ad7490_driver.h | $(A53_DIR)
 	$(TARGET_CC) $(TARGET_CFLAGS) -c $< -o $@
 
 stack: $(A53_LIB)
@@ -118,10 +124,12 @@ $(HOST_DIR)/test_frame_convert.o: driver/ad7490_driver.c
 $(HOST_DIR)/test_monitor.o: driver/ad7490_monitor.c
 
 $(HOST_DIR)/%.o: test/%.c test/test_common.h test/fake_ad7490.h \
-                 driver/ad7490_driver.h driver/ad7490_monitor.h | $(HOST_DIR)
+                 hal/axi_qspi_hal.h driver/ad7490_driver.h \
+                 driver/ad7490_monitor.h | $(HOST_DIR)
 	$(HOST_CC) $(TEST_CFLAGS) -c $< -o $@
 
-$(HOST_DIR)/%.o: driver/%.c driver/ad7490_driver.h | $(HOST_DIR)
+$(HOST_DIR)/%.o: driver/%.c hal/axi_qspi_hal.h \
+                 driver/ad7490_driver.h | $(HOST_DIR)
 	$(HOST_CC) $(TEST_CFLAGS) -c $< -o $@
 
 # ------------------------------- coverage ----------------------------------
@@ -129,11 +137,12 @@ $(HOST_DIR)/%.o: driver/%.c driver/ad7490_driver.h | $(HOST_DIR)
 coverage: test | $(COV_DIR)
 	@echo "--- line coverage ---"
 	@$(GCOVR) -r . $(HOST_DIR) --filter hal/ --filter driver/ \
-	  --object-directory $(HOST_DIR)
+	  --object-directory $(HOST_DIR) --fail-under-line 99
 	@echo "--- branch coverage (ASSERT failure branches excluded) ---"
 	@$(GCOVR) -r . $(HOST_DIR) --filter hal/ --filter driver/ \
 	  --object-directory $(HOST_DIR) \
-	  --txt-metric branch --exclude-lines-by-pattern '.*ASSERT\(.*'
+	  --txt-metric branch --exclude-lines-by-pattern '.*ASSERT\(.*' \
+	  --fail-under-branch 98
 	@$(GCOVR) -r . $(HOST_DIR) --filter hal/ --filter driver/ \
 	  --object-directory $(HOST_DIR) \
 	  --exclude-lines-by-pattern '.*ASSERT\(.*' \

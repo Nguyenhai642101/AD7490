@@ -28,7 +28,7 @@ Every function (public and `static`), file-scope lookup table, and public type i
 | `LLR-QSPI-022` | `SDD-QSPI-3.3` | `is_hal_cfg_ok()` | `axi_qspi_hal.c` | `test_init_params()` |
 | `LLR-QSPI-023` | `SDD-QSPI-3.4` | `is_byte_count_ok()` | `axi_qspi_hal.c` | `test_transceive_bytes()`, `test_write_bytes()`, `test_read_bytes()` |
 | `LLR-QSPI-024` | `SDD-QSPI-3.5` | `clock_mode_ctrl_bits[]`, `build_control_word()` | `axi_qspi_hal.c` | `test_init_sequence_and_faults()` |
-| `LLR-QSPI-025` | `SDD-QSPI-3.6` | `reset_fifos()` | `axi_qspi_hal.c` | `test_transceive_bytes()`, `test_write_bytes()`, `test_read_bytes()` |
+| `LLR-QSPI-025` | `SDD-QSPI-3.6` | `reset_fifos()` | `axi_qspi_hal.c` | `test_init_sequence_and_faults()`, `test_transceive_bytes()`, `test_write_bytes()`, `test_read_bytes()` |
 | `LLR-QSPI-026` | `SDD-QSPI-3.7` | `run_bus_cycle()` | `axi_qspi_hal.c` | `test_transceive_bytes()`, `test_write_bytes()`, `test_read_bytes()` |
 | `LLR-QSPI-027` | `SDD-QSPI-3.8` | `drain_rx_bytes()` | `axi_qspi_hal.c` | `test_transceive_bytes()`, `test_read_bytes()`, `test_drain_rx_fault()` |
 | `LLR-QSPI-028` | `SDD-QSPI-3.9` | `wait_reset_done()` | `axi_qspi_hal.c` | `test_init_sequence_and_faults()` |

@@ -19,6 +19,10 @@ $ProdFiles = @(
     "driver\ad7490_monitor.c"
 )
 
+$ExampleFiles = @(
+    "examples\ad7490_scan16_raw.c"
+)
+
 $TestFiles = @(
     "test\test_common.h",
     "test\test_common.c",
@@ -33,7 +37,8 @@ $TestFiles = @(
 
 $Errors = New-Object System.Collections.Generic.List[string]
 
-foreach ($rel in ($ProdFiles + $TestFiles)) {
+foreach ($rel in ($ProdFiles + $ExampleFiles + $TestFiles)) {
+    $isProd = ($rel -in $ProdFiles) -or ($rel -in $ExampleFiles)
     $full = Join-Path $Root $rel
     if (-not (Test-Path $full)) {
         $Errors.Add("Missing file: $rel")
@@ -95,6 +100,150 @@ foreach ($rel in ($ProdFiles + $TestFiles)) {
                 }
             }
         }
+
+        $isDefine = ($clean -match '^\s*#\s*define')
+        $isEnumConst = ($clean -match '^\s*[A-Z][A-Z0-9_]*\s*=\s*(?:0x[0-9a-fA-F]+|[0-9]+)(?:U|UL|L)?\s*,?\s*$')
+        if ($isProd -and $rel.EndsWith(".c") -and (-not $isDefine) -and (-not $isEnumConst)) {
+            $nums = [regex]::Matches($clean, '\b([0-9]+(?:U|UL|L)?|0x[0-9a-fA-F]+(?:U|UL|L)?)\b')
+            foreach ($nm in $nums) {
+                $lit = $nm.Value
+                if ($lit -notin @('0', '1', '0U', '1U')) {
+                    $Errors.Add("$rel`:$ln : magic number '$lit' in code")
+                }
+            }
+        }
+    }
+}
+
+# Rule 4: Function length <= 100, <= 5 params, single return, prototype-definition match
+function Get-Signatures([string]$FullPath) {
+    $txt = [System.IO.File]::ReadAllText($FullPath)
+    $txt = [regex]::Replace($txt, '/\*[\s\S]*?\*/', '')
+    $txt = [regex]::Replace($txt, '"(?:\\.|[^"\\])*"', '""')
+    $txt = [regex]::Replace($txt, '(?m)^\s*#.*$', '')
+    $protos = @([regex]::Matches($txt, '(?m)^((?:static\s+(?:inline\s+)?)?[a-zA-Z0-9_]+\s+[a-zA-Z0-9_]+\s*\([^;\{]*\))\s*;') |
+        ForEach-Object { ($_.Groups[1].Value -replace '\s+', ' ').Trim() })
+    $defs = @([regex]::Matches($txt, '(?m)^((?:static\s+(?:inline\s+)?)?[a-zA-Z0-9_]+\s+[a-zA-Z0-9_]+\s*\([^;\{]*\))\s*\{') |
+        ForEach-Object { ($_.Groups[1].Value -replace '\s+', ' ').Trim() })
+    return @{ Protos = $protos; Defs = $defs }
+}
+
+$Pairs = @(
+    @("hal\axi_qspi_hal.h", "hal\axi_qspi_hal.c"),
+    @("driver\ad7490_driver.h", "driver\ad7490_driver.c"),
+    @("driver\ad7490_monitor.h", "driver\ad7490_monitor.c"),
+    @("examples\ad7490_scan16_raw.c", "examples\ad7490_scan16_raw.c")
+)
+
+foreach ($pair in $Pairs) {
+    $hRel = $pair[0]
+    $cRel = $pair[1]
+    $hFull = Join-Path $Root $hRel
+    $cFull = Join-Path $Root $cRel
+    if (-not ((Test-Path $hFull) -and (Test-Path $cFull))) { continue }
+
+    $cLines = [System.IO.File]::ReadAllLines($cFull)
+    $inFunc = $false
+    $funcStart = 0
+    $braceDepth = 0
+    $returnCount = 0
+
+    for ($idx = 0; $idx -lt $cLines.Count; $idx++) {
+        $line = $cLines[$idx]
+        if ((-not $inFunc) -and ($line -eq "{")) {
+            $sigIdx = $idx - 1
+            while (($sigIdx -ge 0) -and ($cLines[$sigIdx] -notmatch '^[a-zA-Z_]')) {
+                $sigIdx--
+            }
+            if (($sigIdx -ge 0) -and ($cLines[$sigIdx] -notmatch '^(typedef|static const)')) {
+                $inFunc = $true
+                $funcStart = $sigIdx + 1
+                $funcSig = (($cLines[$sigIdx..($idx - 1)] | ForEach-Object { $_.Trim() }) -join " ").Trim()
+                $braceDepth = 1
+                $returnCount = 0
+                $openParen = $funcSig.IndexOf("(")
+                $closeParen = $funcSig.LastIndexOf(")")
+                $paramsStr = $funcSig.Substring($openParen + 1, $closeParen - $openParen - 1).Trim()
+                $paramCount = if ($paramsStr -in @("", "void")) { 0 } else { $paramsStr.Split(",").Count }
+                if ($paramCount -gt 5) {
+                    $Errors.Add("$cRel`:$funcStart : $paramCount params > 5")
+                }
+                continue
+            }
+        }
+        if ($inFunc) {
+            $clean = $line -replace '/\*.*?\*/', ''
+            $opens = ([regex]::Matches($clean, '\{')).Count
+            $closes = ([regex]::Matches($clean, '\}')).Count
+            $braceDepth += ($opens - $closes)
+            if ($clean -match '\breturn\b') {
+                $returnCount++
+            }
+            if ($braceDepth -eq 0) {
+                $funcLen = ($idx + 1) - $funcStart + 1
+                if ($funcLen -gt 100) {
+                    $Errors.Add("$cRel`:$funcStart : function length $funcLen > 100")
+                }
+                if ($returnCount -gt 1) {
+                    $Errors.Add("$cRel`:$funcStart : $returnCount returns > 1")
+                }
+                $inFunc = $false
+            }
+        }
+    }
+
+    $hSigs = Get-Signatures $hFull
+    $cSigs = Get-Signatures $cFull
+    $allProtos = @($hSigs.Protos + $cSigs.Protos | Select-Object -Unique)
+    foreach ($d in $cSigs.Defs) {
+        if ($d -notin $allProtos) {
+            $Errors.Add("$cRel : definition '$d' does not match any prototype")
+        }
+    }
+    foreach ($p in $allProtos) {
+        if ($p -notin $cSigs.Defs) {
+            $Errors.Add("$cRel : prototype '$p' does not match any definition")
+        }
+    }
+}
+
+# Rule 9: SEU Hamming distance >= 12 parsed from headers
+$ExpectedPatterns = @(
+    "AD7490_STATE_READY",
+    "AD7490_STATE_SEQUENCING",
+    "AD7490_STATE_FAULT",
+    "AD7490_MON_HEALTH_ACTIVE",
+    "AD7490_MON_HEALTH_FAILED"
+)
+$Patterns = @{}
+foreach ($hRel in @("driver\ad7490_driver.h", "driver\ad7490_monitor.h")) {
+    $hFull = Join-Path $Root $hRel
+    if (Test-Path $hFull) {
+        $hTxt = [System.IO.File]::ReadAllText($hFull)
+        $defMatches = [regex]::Matches($hTxt, '(?m)^\s*#\s*define\s+(AD7490_(?:STATE|MON_HEALTH)_[A-Z0-9_]+)\s+\(?(0x[0-9a-fA-F]+)U?\)?')
+        foreach ($dm in $defMatches) {
+            $Patterns[$dm.Groups[1].Value] = [Convert]::ToInt64($dm.Groups[2].Value, 16)
+        }
+    }
+}
+foreach ($ep in $ExpectedPatterns) {
+    if (-not $Patterns.ContainsKey($ep)) {
+        $Errors.Add("Missing SEU state/health macro in headers: $ep")
+    }
+}
+$Patterns["ZERO"] = [int64]0
+$Patterns["ONES"] = [Convert]::ToInt64("0xFFFFFFFF", 16)
+$pKeys = @($Patterns.Keys)
+for ($i = 0; $i -lt $pKeys.Count; $i++) {
+    for ($j = $i + 1; $j -lt $pKeys.Count; $j++) {
+        $k1 = $pKeys[$i]
+        $k2 = $pKeys[$j]
+        $xorVal = [int64]($Patterns[$k1] -bxor $Patterns[$k2])
+        $binStr = [Convert]::ToString($xorVal, 2)
+        $hd = ([regex]::Matches($binStr, '1')).Count
+        if ($hd -lt 12) {
+            $Errors.Add("SEU Hamming distance between $k1 and $k2 is $hd < 12")
+        }
     }
 }
 
@@ -116,12 +265,15 @@ foreach ($doc in $RequiredDocs) {
 
 $matrixPath = Join-Path $Root "docs\TRACEABILITY_MATRIX.md"
 $llrPath    = Join-Path $Root "docs\LOW_LEVEL_REQUIREMENTS.md"
-if ((Test-Path $matrixPath) -and (Test-Path $llrPath)) {
+$sddPath    = Join-Path $Root "docs\SOFTWARE_DESIGN_DESCRIPTION.md"
+if ((Test-Path $matrixPath) -and (Test-Path $llrPath) -and (Test-Path $sddPath)) {
     $matrixText = [System.IO.File]::ReadAllText($matrixPath)
     $llrText    = [System.IO.File]::ReadAllText($llrPath)
+    $sddText    = [System.IO.File]::ReadAllText($sddPath)
     $matrixReqs = @([regex]::Matches($matrixText, '\bLLR-(?:QSPI|AD7490)-\d{3}\b') | ForEach-Object { $_.Value } | Select-Object -Unique)
     $matrixSdds = @([regex]::Matches($matrixText, '\bSDD-(?:QSPI|AD7490)-\d+\.\d+\b') | ForEach-Object { $_.Value } | Select-Object -Unique)
     $llrReqs    = @([regex]::Matches($llrText, '\bLLR-(?:QSPI|AD7490)-\d{3}\b') | ForEach-Object { $_.Value } | Select-Object -Unique)
+    $sddIds     = @([regex]::Matches($sddText, '\bSDD-(?:QSPI|AD7490)-\d+\.\d+\b') | ForEach-Object { $_.Value } | Select-Object -Unique)
 
     $codeReqs = @()
     $codeSdds = @()
@@ -145,6 +297,7 @@ if ((Test-Path $matrixPath) -and (Test-Path $llrPath)) {
     }
     foreach ($s in $codeSdds) {
         if ($s -notin $matrixSdds) { $Errors.Add("Design ID $s in code missing from TRACEABILITY_MATRIX.md") }
+        if ($s -notin $sddIds) { $Errors.Add("Design ID $s in code missing from SOFTWARE_DESIGN_DESCRIPTION.md") }
     }
     foreach ($s in $matrixSdds) {
         if ($s -notin $codeSdds) { $Errors.Add("Design ID $s in TRACEABILITY_MATRIX.md missing from code") }
@@ -189,6 +342,7 @@ if ($Errors.Count -gt 0) {
 Write-Output "================================================================"
 Write-Output "AD7490 COMPLIANCE & TRACEABILITY AUDIT: PASS (0 errors)"
 Write-Output "  - Production files verified : $($ProdFiles.Count)"
+Write-Output "  - Example files verified    : $($ExampleFiles.Count)"
 Write-Output "  - Test files verified       : $($TestFiles.Count)"
 Write-Output "  - Rule 0 formatting         : PASS (<= 80 cols, Allman, no //)"
 Write-Output "  - Rule 2 naming             : PASS (3..31 chars, no vague stems)"

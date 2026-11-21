@@ -64,6 +64,9 @@
 /* Reads issued after SRR: 2 x the 16-ACLK reset pulse, >= 1 ACLK each */
 #define QSPI_RESET_SETTLE_READS     (32U)
 
+/* Reads holding TX/RX FIFO reset: 4 AXI4-Lite reads (>= 16 ACLK pulse) */
+#define QSPI_FIFO_RESET_READS       (4U)
+
 static inline void reg_write32(uintptr_t base_addr,
                                uint32_t offset_bytes,
                                uint32_t reg_word);
@@ -122,9 +125,6 @@ qspi_hal_status_t qspi_hal_init(qspi_hal_config_t const * p_cfg)
     {
         uintptr_t base_addr = p_cfg->base_addr;
         uint32_t ctrl_word = build_control_word(p_cfg->clock_mode);
-        uint32_t init_ctrl = ctrl_word
-                             | QSPI_SPICR_TX_RESET_MASK
-                             | QSPI_SPICR_RX_RESET_MASK;
         uint32_t status_reg = 0U;
         bool is_reset_done = false;
 
@@ -150,8 +150,7 @@ qspi_hal_status_t qspi_hal_init(qspi_hal_config_t const * p_cfg)
                         QSPI_SPISSR_DEASSERT_ALL);
 
             /* Master, manual SS, inhibited, FIFOs flushed */
-            reg_write32(base_addr, QSPI_REG_SPICR_OFFSET, init_ctrl);
-            reg_write32(base_addr, QSPI_REG_SPICR_OFFSET, ctrl_word);
+            reset_fifos(base_addr, ctrl_word);
 
             status_reg = reg_read32(base_addr, QSPI_REG_SPISR_OFFSET);
 
@@ -513,9 +512,9 @@ static bool wait_reset_done(uintptr_t base_addr)
  *              run_bus_cycle() then reports as QSPI_HAL_ERR_TIMEOUT.
  *              Measured on hardware (AXI Quad SPI v3.2, ACLK 100 MHz,
  *              Frequency Ratio 16x1): a single AXI read between the
- *              two writes is already enough; this code keeps the same
- *              QSPI_RESET_SETTLE_READS margin as the SRR reset.
- *              WCET: 2 AXI writes + QSPI_RESET_SETTLE_READS reads.
+ *              two writes is already enough; QSPI_FIFO_RESET_READS (4)
+ *              gives >= 16 ACLK with low per-frame AXI bus overhead.
+ *              WCET: 2 AXI writes + QSPI_FIFO_RESET_READS reads (6).
  */
 static void reset_fifos(uintptr_t base_addr,
                         uint32_t ctrl_inhibit)
@@ -529,7 +528,7 @@ static void reset_fifos(uintptr_t base_addr,
 
     reg_write32(base_addr, QSPI_REG_SPICR_OFFSET, ctrl_reset);
 
-    for (i = 0U; i < QSPI_RESET_SETTLE_READS; i++)
+    for (i = 0U; i < QSPI_FIFO_RESET_READS; i++)
     {
         (void)reg_read32(base_addr, QSPI_REG_SPICR_OFFSET);
     }

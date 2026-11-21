@@ -65,7 +65,7 @@
 #define AD7490_DEFAULT_CHANNEL      (0U)
 
 /* Number of members in ad7490_seq_mode_t */
-#define AD7490_SEQ_MODE_COUNT       (4U)
+#define AD7490_SEQ_MODE_COUNT       (3U)
 
 /* 12-bit converter: 2^12 codes per span, 1 LSB = span / 4096 (Fig 8, 9) */
 #define AD7490_CODES_PER_SPAN       (4096U)
@@ -83,15 +83,15 @@
  * @brief       SEQ / SHADOW bit combinations (AD7490 Table IV).
  * @req         LLR-AD7490-032
  * @design      SDD-AD7490-3.13
- * @note        One named mode per row of the datasheet table instead of
- *              two bool flags (minimal control coupling, rule §3).
+ * @note        One named mode per used row of the datasheet table
+ *              instead of two bool flags (minimal control coupling,
+ *              rule §3).
  */
 typedef enum
 {
     AD7490_SEQ_MODE_SINGLE      = 0U, /* SEQ 0 SHADOW 0: ADD3..0 = channel  */
     AD7490_SEQ_MODE_LOAD_SHADOW = 1U, /* SEQ 0 SHADOW 1: next frame = mask  */
-    AD7490_SEQ_MODE_KEEP_SEQ    = 2U, /* SEQ 1 SHADOW 0: CR write, seq runs */
-    AD7490_SEQ_MODE_CONSECUTIVE = 3U  /* SEQ 1 SHADOW 1: VIN0..ADD3..0 loop */
+    AD7490_SEQ_MODE_KEEP_SEQ    = 2U  /* SEQ 1 SHADOW 0: CR write, seq runs */
 } ad7490_seq_mode_t;
 
 /**
@@ -188,8 +188,7 @@ static const uint32_t seq_mode_cr_bits[AD7490_SEQ_MODE_COUNT] =
 {
     [AD7490_SEQ_MODE_SINGLE]      = 0U,
     [AD7490_SEQ_MODE_LOAD_SHADOW] = AD7490_CR_SHADOW_BIT,
-    [AD7490_SEQ_MODE_KEEP_SEQ]    = AD7490_CR_SEQ_BIT,
-    [AD7490_SEQ_MODE_CONSECUTIVE] = (AD7490_CR_SEQ_BIT | AD7490_CR_SHADOW_BIT)
+    [AD7490_SEQ_MODE_KEEP_SEQ]    = AD7490_CR_SEQ_BIT
 };
 
 
@@ -248,7 +247,7 @@ ad7490_status_t ad7490_init(ad7490_dev_t * p_dev,
  * @req         LLR-AD7490-011
  * @design      SDD-AD7490-2.2
  */
-ad7490_status_t ad7490_read_channel(ad7490_dev_t const * p_dev,
+ad7490_status_t ad7490_read_channel(ad7490_dev_t * p_dev,
                                     uint8_t channel_id,
                                     ad7490_sample_t * p_sample)
 {
@@ -278,6 +277,16 @@ ad7490_status_t ad7490_read_channel(ad7490_dev_t const * p_dev,
     else
     {
         result = read_single(&p_dev->cfg, channel_id, p_sample);
+
+        if (AD7490_OK != result)
+        {
+            /* Bus fault, echo mismatch or corrupted handle: re-init */
+            p_dev->state = AD7490_STATE_FAULT;
+        }
+        else
+        {
+            /* Conversion succeeded: handle stays READY */
+        }
     }
 
     return result;
@@ -533,6 +542,10 @@ static bool is_dev_cfg_ok(ad7490_config_t const * p_cfg)
         is_ok = false;
     }
     else if (p_cfg->qspi_cfg.poll_timeout_us < AD7490_MIN_TIMEOUT_US)
+    {
+        is_ok = false;
+    }
+    else if (p_cfg->qspi_cfg.poll_timeout_us > AD7490_MAX_TIMEOUT_US)
     {
         is_ok = false;
     }
@@ -805,11 +818,13 @@ static ad7490_status_t decode_sample(ad7490_config_t const * p_cfg,
  * @param[in]   p_ctrl_cfg  Control options carrying the new power mode.
  * @return      AD7490_OK, AD7490_ERR_PARAM, AD7490_ERR_SPI,
  *              AD7490_ERR_TIMEOUT.
- * @note        Leaving full shutdown needs 1 us before a valid conversion
- *              (tPOWER-UP). One dummy frame (16 SCLK = 2.56 us) with
- *              WRITE = 0 covers it without touching the new CR; its DOUT
- *              is discarded on purpose. Not needed when entering
- *              FULL_SHUTDOWN. WCET: 2 frames.
+ * @note        Waking to NORMAL mode needs 1 us before a valid
+ *              conversion (tPOWER-UP). One dummy frame (16 SCLK =
+ *              2.56 us) with WRITE = 0 covers it without touching the
+ *              new CR; its DOUT is discarded on purpose. Not sent when
+ *              entering FULL_SHUTDOWN, AUTO_STANDBY or AUTO_SHUTDOWN,
+ *              where a WRITE = 0 frame would wake the part back up.
+ *              WCET: 2 frames.
  */
 static ad7490_status_t write_power_mode(qspi_hal_config_t const * p_qspi_cfg,
                                         ad7490_ctrl_cfg_t const * p_ctrl_cfg)
@@ -835,13 +850,13 @@ static ad7490_status_t write_power_mode(qspi_hal_config_t const * p_qspi_cfg,
     }
 
     if ((AD7490_OK == result)
-        && (AD7490_POWER_FULL_SHUTDOWN != p_ctrl_cfg->power_mode))
+        && (AD7490_POWER_NORMAL == p_ctrl_cfg->power_mode))
     {
         result = read_frame(p_qspi_cfg, &dummy_rx_frame);
     }
     else
     {
-        /* Error, or entering full shutdown: no power-up wait needed */
+        /* Error, or low-power mode: no power-up wait needed */
     }
 
     return result;
@@ -922,11 +937,15 @@ static uint32_t count_channels(uint16_t channel_mask)
  * @return      AD7490_OK, AD7490_ERR_PARAM, AD7490_ERR_SPI,
  *              AD7490_ERR_TIMEOUT.
  * @note        Frame 1: CR with SEQ = 0, SHADOW = 1 (Table IV).
- *              Frame 2: Shadow Register (Figure 18).
+ *              Frame 2: Shadow Register (Figure 18); on its CS rising
+ *              edge (point C) the track-and-hold begins tracking the
+ *              lowest selected channel C_0.
  *              Frame 3: priming frame, WRITE = 0, DOUT discarded. It
- *              flushes the conversion still selected by ADD3..ADD0, so
- *              the first scan sees only sequenced channels whatever the
- *              exact start latency of the sequencer. WCET: 3 frames.
+ *              flushes the conversion still selected by ADD3..ADD0 if
+ *              1-frame start latency applies, or converts and discards
+ *              C_0 on 0-latency hardware (advancing the ring so each
+ *              scan pass samples C_1 .. C_{N-1}, C_0 and stores results
+ *              by channel ID). WCET: 3 frames.
  */
 static ad7490_status_t send_start_frames(ad7490_config_t const * p_cfg,
                                          uint16_t shadow_word)
@@ -1111,7 +1130,7 @@ static ad7490_status_t init_bus(qspi_hal_config_t const * p_qspi_cfg)
  * @design      SDD-AD7490-3.2
  * @param[in]   p_ctrl_cfg  Control Register options (from a handle).
  * @param[in]   channel_id  Value for ADD3..ADD0, 0..15.
- * @param[in]   seq_mode    SEQ / SHADOW combination, 0..3.
+ * @param[in]   seq_mode    SEQ / SHADOW combination, 0..2.
  * @param[out]  p_tx_frame  DIN word, CR in bits 15..4.
  * @return      AD7490_OK, AD7490_ERR_PARAM.
  * @note        AD7490_ERR_PARAM only when ctrl_cfg holds a value outside
@@ -1319,7 +1338,7 @@ static bool is_ctrl_cfg_ok(ad7490_ctrl_cfg_t const * p_ctrl_cfg)
  * @design      SDD-AD7490-3.11
  * @param[in]   p_ctrl_cfg  Validated Control Register options.
  * @param[in]   channel_id  Validated channel, 0..15.
- * @param[in]   seq_mode    Validated SEQ / SHADOW mode, 0..3.
+ * @param[in]   seq_mode    Validated SEQ / SHADOW mode, 0..2.
  * @return      CR word in bits 11..0.
  * @note        Pure helper; cannot fail. Enum values equal their bit
  *              patterns, so they are shifted directly: no per-option

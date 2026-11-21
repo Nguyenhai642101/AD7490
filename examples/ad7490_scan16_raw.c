@@ -341,17 +341,26 @@ static void window_push(scan16_window_t * p_window, uint16_t raw_lsb)
 /* Rounded mean of the codes stored. Sum <= 16 x 4095 = 65520 */
 static uint16_t window_mean_raw(scan16_window_t const * p_window)
 {
+    uint16_t result = 0U;
     uint32_t sum_raw = 0U;
-    uint32_t sample_total = (uint32_t)p_window->fill_count;
-    uint32_t half_step = sample_total / SCAN16_ROUND_DIVISOR;
+    uint32_t sample_total = 0U;
+    uint32_t half_step = 0U;
     size_t i = 0U;
+
+    ASSERT(NULL != p_window);
+    ASSERT(0U < p_window->fill_count);
+
+    sample_total = (uint32_t)p_window->fill_count;
+    half_step = sample_total / SCAN16_ROUND_DIVISOR;
 
     for (i = 0U; i < p_window->fill_count; i++)
     {
         sum_raw += (uint32_t)p_window->window_raw[i];
     }
 
-    return (uint16_t)((sum_raw + half_step) / sample_total);
+    result = (uint16_t)((sum_raw + half_step) / sample_total);
+
+    return result;
 }
 
 

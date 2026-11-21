@@ -34,11 +34,11 @@ Verification consists of two independent, automated stages:
 |:---|:---|:---|:---:|:---:|:---|:---:|
 | `test_qspi_hal` | [`test/test_qspi_hal.c`](../test/test_qspi_hal.c) | `hal/axi_qspi_hal.c` | 6 | 59 | `LLR-QSPI-001` .. `LLR-QSPI-031` | **PASS** |
 | `test_frame_convert` | [`test/test_frame_convert.c`](../test/test_frame_convert.c) | `driver/ad7490_driver.c` (§C, §D) | 7 | 835,642 | `LLR-AD7490-004`..`006`, `009`, `020`..`038` | **PASS** |
-| `test_device` | [`test/test_device.c`](../test/test_device.c) | `driver/ad7490_driver.c` (§Public, §A) | 10 (+1 helper) | 115 | `LLR-AD7490-001`..`003`, `007`..`008`, `010`..`011`, `014`, `040`..`048` | **PASS** |
+| `test_device` | [`test/test_device.c`](../test/test_device.c) | `driver/ad7490_driver.c` (§Public, §A) | 10 (+1 helper) | 132 | `LLR-AD7490-001`..`003`, `007`..`008`, `010`..`011`, `014`, `040`..`048` | **PASS** |
 | `test_sequencer` | [`test/test_sequencer.c`](../test/test_sequencer.c) | `driver/ad7490_driver.c` (§Public, §B) | 6 (7 invocations) | 213 | `LLR-AD7490-012`..`013`, `015`, `050`..`054` | **PASS** |
-| `test_monitor` | [`test/test_monitor.c`](../test/test_monitor.c) | `driver/ad7490_monitor.c` (§Public, §A, §B) | 14 | 806 | `LLR-AD7490-060` .. `LLR-AD7490-081` | **PASS** |
+| `test_monitor` | [`test/test_monitor.c`](../test/test_monitor.c) | `driver/ad7490_monitor.c` (§Public, §A, §B) | 14 | 809 | `LLR-AD7490-060` .. `LLR-AD7490-081` | **PASS** |
 
-All 836,835 `CHECK` results pass and no `ASSERT` contract fails (`test_assert` count 0) in every suite.
+All 836,855 `CHECK` results pass and no `ASSERT` contract fails (`test_assert` count 0) in every suite.
 
 ---
 
@@ -61,7 +61,7 @@ All 836,835 `CHECK` results pass and no `ASSERT` contract fails (`test_assert` c
 6. **`test_drain_rx_fault()`**: Directly invokes `drain_rx_bytes()` with `SPISR.RX_EMPTY = 1` to verify the hardware fault abort branch (`QSPI_HAL_ERR_HW`), confirming that the destination array is untouched when the fault hits the first byte. The partial case (fault on byte `i > 0`, where `LLR-QSPI-027` allows `p_rx_bytes[0 .. i-1]` to stay written) is not reachable in this suite: the host register model is plain RAM, so `SPISR.RX_EMPTY` cannot change between two iterations of the drain loop. Structurally it is the same branch (already covered), so it is not a coverage gap; it is a requirement-level scenario for hardware/software integration testing, where `SPISR` is a real register.
 
 ### 3.2 `test_frame_convert` (`driver/ad7490_driver.c` — Frame & Conversion Layers)
-1. **`test_cr_encoding()`**: Verifies exact 16-bit DIN frame encoding (`0x9710U`, `0x83E0U`, `0xFC80U`, `0xC000U`) across all `ad7490_seq_mode_t`, range, coding, power mode, and DOUT mode combinations.
+1. **`test_cr_encoding()`**: Verifies exact 16-bit DIN frame encoding (`0x9710U`, `0x83E0U`, `0xBC00U`, `0xC000U`) across all `ad7490_seq_mode_t`, range, coding, power mode, and DOUT mode combinations.
 2. **`test_cr_rejects_bad_enum()`**: Injects out-of-range enum values into `power_mode`, `range_mode`, `coding`, and `dout_mode`, confirming `AD7490_ERR_PARAM` and untouched output; directly tests defensive branch `DEF-AD7490-001` in `encode_cr_word()`.
 3. **`test_frames()`**: Verifies `write_frame()`, `txrx_frame()`, `read_frame()` (confirming `dummy_tx_byte == 0x00U`), `decode_dout()`, and preservation of `*p_rx_frame` on `QSPI_HAL_ERR_TIMEOUT` and `QSPI_HAL_ERR_HW`.
 4. **`test_hal_status_map()`**: Verifies `map_hal_status()` for all defined `qspi_hal_status_t` values plus out-of-range `(qspi_hal_status_t)9U` (`DEF-AD7490-002` $\rightarrow$ `AD7490_ERR_SPI`), and `init_bus()`.
@@ -71,13 +71,13 @@ All 836,835 `CHECK` results pass and no `ASSERT` contract fails (`test_assert` c
 
 ### 3.3 `test_device` (`driver/ad7490_driver.c` — Lifecycle, Single Read & Power Modes)
 1. **`test_uninitialised_handle()`**: Confirms a zero-filled `ad7490_dev_t` handle is rejected with `AD7490_ERR_STATE` by both `ad7490_read_channel()` and `ad7490_set_power_mode()`.
-2. **`test_init_rejects_bad_config()`**: Verifies `NULL` pointers, invalid `vref_mv` (`3300 mV`), wrong SPI clock mode (`MODE_3`), `poll_timeout_us < 3U`, and invalid `coding` enum are rejected with `AD7490_ERR_PARAM` and `0` SPI frames sent, leaving `dev.state == AD7490_STATE_FAULT`.
+2. **`test_init_rejects_bad_config()`**: Verifies `NULL` pointers, invalid `vref_mv` (`3300 mV`), wrong SPI clock mode (`MODE_3`), `poll_timeout_us < 3U`, `poll_timeout_us > 100U`, and invalid `coding` enum are rejected with `AD7490_ERR_PARAM` and `0` SPI frames sent, leaving `dev.state == AD7490_STATE_FAULT`.
 3. **`test_init_sequence()`**: Confirms `ad7490_init()` sends exactly 3 frames (`0xFFFFU`, `0xFFFFU`, `0x8310U`) and sets `dev.state == AD7490_STATE_READY`.
 4. **`test_init_bus_errors()`**: Injects QSPI init hardware failure, timeout on dummy frame 2, and timeout on CR frame 3, confirming `AD7490_STATE_FAULT` on every error path.
 5. **`test_read_channel()`**: Verifies 2-frame pipelined single-channel read on `VIN5` (`DIN = 0x9710U` twice, `raw_lsb = 0x510`, `voltage_mv = 1582 mV`) followed immediately by `VIN12`.
-6. **`test_read_errors()`**: Verifies `NULL` arguments, `channel_id == 16U`, channel echo mismatch (`AD7490_ERR_CHAN_MISMATCH`), timeout on Frame 1, and timeout on Frame 2, confirming `p_sample` is untouched on all failures.
+6. **`test_read_errors()`**: Verifies `NULL` arguments, `channel_id == 16U`, channel echo mismatch (`AD7490_ERR_CHAN_MISMATCH`), timeout on Frame 1, and timeout on Frame 2, confirming `p_sample` is untouched on all failures and bus/echo errors latch `AD7490_STATE_FAULT`.
 7. **`test_power_modes()`**: Verifies transition to `FULL_SHUTDOWN` (1 frame `0x8210U`, subsequent reads blocked with `AD7490_ERR_STATE`), wake to `NORMAL` (2 frames: CR `0x8310U` + dummy read frame with `DIN = 0x00U`).
-8. **`test_auto_mode_reads()`**: For `AUTO_STANDBY` and `AUTO_SHUTDOWN` (AD7490 Fig. 14, 15): verifies the 3-frame read (CR write `0x8810U` / `0x8910U` selecting `VIN2`, then two `WRITE = 0` frames `0x0000U`), the correct **value** (`raw_lsb = 0x210`, `645 mV`, not only the channel echo, because the model returns invalid data with correct channel bits), a back-to-back read starting with the part asleep (`VIN7`, `0x710`), that the model really produced invalid dummy frames, and timeouts on the dummy frame and on the result frame (sample untouched, state stays `READY`).
+8. **`test_auto_mode_reads()`**: For `AUTO_STANDBY` and `AUTO_SHUTDOWN` (AD7490 Fig. 14, 15): verifies that `ad7490_set_power_mode()` sends 1 CR write frame and leaves the part powered down (`!fake_adc_is_powered()`), verifies the 3-frame read (CR write `0x8810U` / `0x8910U` selecting `VIN2`, then two `WRITE = 0` frames `0x0000U`), the correct **value** (`raw_lsb = 0x210`, `645 mV`, not only the channel echo, because the model returns invalid data with correct channel bits), a back-to-back read starting with the part asleep (`VIN7`, `0x710`), that the model really produced invalid dummy frames, and timeouts on the dummy frame and on the result frame (sample untouched, state latches `FAULT`).
 9. **`test_power_mode_errors()`**: Verifies invalid enum (`4U`), `NULL` handle, timeout on the wakeup dummy frame transitions `dev.state` to `AD7490_STATE_FAULT`, and recovery via `ad7490_init()`.
 10. **`test_corrupted_handle()`**: Simulates Single-Event Upsets (SEU) in RAM: flipping 1 bit in `dev.state` (`^= 0x100U`), corrupting `range_mode = 5U`, and corrupting `vref_mv = 1U` inside a `READY` handle.
 
@@ -120,7 +120,7 @@ Measured on the host test build (`-O0 -g --coverage`). Line and branch coverage:
 | `hal/axi_qspi_hal.c` | 188 / 189 (**99.5%**) | 73 / 74 (**98.6%**) | see note |
 | **Total** | **746 / 747 (99.9%)** | **320 / 321 (99.7%)** | see note |
 
-The single uncovered item in all three metrics is the same one: the `SS0`-stuck-low check of `run_bus_cycle()` (the `else if (0U == (ss_reg & QSPI_SPISSR_SS0_MASK))` decision and the `result = QSPI_HAL_ERR_HW` statement it guards), justified in §5. Items are named by element, not by line number, because a line number silently drifts on every edit above it; in the revision measured here they are lines 688 and 691. MC/DC was last measured at 313 / 314 before the `reset_fifos()` hold was added (`LLR-QSPI-025`); that loop adds one decision whose both outcomes the suites exercise, but the figure has **not** been re-measured with GCC 14 on this revision and is therefore not restated above.
+The single uncovered item in all three metrics is the same one: the `SS0`-stuck-low check of `run_bus_cycle()` (the `else if (0U == (ss_reg & QSPI_SPISSR_SS0_MASK))` decision and the `result = QSPI_HAL_ERR_HW` statement it guards), justified in §5. Items are named by element, not by line number, because a line number silently drifts on every edit above it; in the revision measured here they are lines 687 and 690. MC/DC was last measured at 313 / 314 before the `reset_fifos()` hold was added (`LLR-QSPI-025`); that loop adds one decision whose both outcomes the suites exercise, but the figure has **not** been re-measured with GCC 14 on this revision and is therefore not restated above.
 
 Notes:
 - Branch coverage is identical with and without the `ASSERT` exclusion: in the test build `ASSERT(expr)` expands to a call of `test_assert()`, which adds no branch to the code under test.
@@ -130,7 +130,7 @@ Notes:
 
 | Verification Metric | Target | Measured Result | Evidence / Tool |
 |:---|:---:|:---|:---|
-| **Rule §0 Formatting (Allman incl. `else {` / `} else`, $\le 80$ cols, no `//`, no tabs, no trailing whitespace, LF, no relative `#include`, single trailing newline)** | 0 violations | 0 violations in the 15 `.c`/`.h` files of `hal/`, `driver/`, `test/` | `make style` (`test/check_style.awk`), `scripts/verify_compliance.*` |
+| **Rule §0 Formatting (Allman incl. `else {` / `} else`, $\le 80$ cols, no `//`, no tabs, no trailing whitespace, LF, no relative `#include`, single trailing newline)** | 0 violations | 0 violations in the 16 `.c`/`.h` files of `hal/`, `driver/`, `examples/`, `test/` | `make style` (`test/check_style.awk`), `scripts/verify_compliance.*` |
 | **Rule §2 Naming (3..31 chars, no vague stems, no prefixes)** | 0 violations | 0 violations | `scripts/verify_compliance.py` / `.ps1` |
 | **Rule §4 Function Metrics ($\le 100$ lines, $\le 5$ params, single exit)** | 0 violations | 63 functions in `hal/`, `driver/`; longest `ad7490_sequencer_read_scan()` = 82 lines (signature to closing brace); max 5 parameters (`raw_to_mv()`, `scan_one()`); every non-`void` function has exactly one `return`, `void` functions have none | `scripts/verify_compliance.py` / `.ps1` |
 | **Bi-Directional Traceability (`@req` $\leftrightarrow$ `@design` $\leftrightarrow$ Docs)** | 0 orphans | 86 LLR IDs and 87 SDD IDs in code; 0 differences code $\leftrightarrow$ `LOW_LEVEL_REQUIREMENTS.md`, code $\leftrightarrow$ `TRACEABILITY_MATRIX.md`, code $\rightarrow$ `SOFTWARE_DESIGN_DESCRIPTION.md` §6 | `scripts/verify_compliance.*` |
@@ -143,7 +143,7 @@ Notes:
 
 | Location | Uncovered item | Why the host tests cannot reach it | Disposition |
 |:---|:---|:---|:---|
-| `hal/axi_qspi_hal.c:664`, line 667 (`run_bus_cycle()`) | Decision `0U == (ss_reg & QSPI_SPISSR_SS0_MASK)` never `true`; statement `result = QSPI_HAL_ERR_HW` (SS0 stuck low) never executed | The host register model is plain RAM: the read-back of `SPISSR` returns exactly the `0xFFFFFFFF` the HAL has just written, so a slave-select line stuck low cannot be represented. | Not dead code: hardware-fault detection required by `LLR-QSPI-026`. **Open item:** to be covered by a hardware/software integration test on the target (fault injection on SS0, or a register model with independent read-back). Until then, structural coverage of `axi_qspi_hal.c` is 99.5% statement / 98.6% branch and MC/DC. |
+| `run_bus_cycle()` in `hal/axi_qspi_hal.c` (`LLR-QSPI-026`, `SDD-QSPI-3.7`, lines 687 and 690) | Decision `0U == (ss_reg & QSPI_SPISSR_SS0_MASK)` never `true`; statement `result = QSPI_HAL_ERR_HW` (SS0 stuck low) never executed | The host register model is plain RAM: the read-back of `SPISSR` returns exactly the `0xFFFFFFFF` the HAL has just written, so a slave-select line stuck low cannot be represented. | Not dead code: hardware-fault detection required by `LLR-QSPI-026`. **Open item:** to be covered by a hardware/software integration test on the target (fault injection on SS0, or a register model with independent read-back). Until then, structural coverage of `axi_qspi_hal.c` is 99.5% statement / 98.6% branch and MC/DC. |
 
 **Hardware timing constraints the host model cannot see.** The AXI Quad SPI register model of `test_qspi_hal.c` is plain host RAM, so timing requirements of the real IP are invisible to it. One was found during hardware/software integration and is now implemented in `reset_fifos()` (`LLR-QSPI-025`, `SDD-QSPI-3.6`): the TX/RX FIFO reset bits must stay asserted for at least the IP reset pulse (16 ACLK) before being cleared. With the two `SPICR` writes back to back the reset does not complete, the TX FIFO silently drops the first byte written to `SPIDTR` afterwards, and `qspi_hal_init()` fails with `QSPI_HAL_ERR_TIMEOUT` on its first frame. The host suites pass with **and** without the hold, so they cannot detect a regression of it; verifying this constraint is an open item for hardware/software integration testing, like the `SS0` case above.
 

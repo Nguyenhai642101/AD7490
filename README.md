@@ -233,7 +233,7 @@ your divider ratio afterwards if the input is attenuated.
 ## 5. Build, Test & Verification Instructions
 
 ### 5.1 Automated Rule & Bi-Directional Traceability Audit (No Compiler Required)
-Verifies all 15 `.c`/`.h` files and all certification documents in `docs/` against [`docs/C_rules_v3_addDO178C.md`](docs/C_rules_v3_addDO178C.md):
+Verifies all 16 `.c`/`.h` files and all certification documents in `docs/` against [`docs/C_rules_v3_addDO178C.md`](docs/C_rules_v3_addDO178C.md):
 
 ```bash
 # Python 3 (Linux / macOS / Windows)
@@ -279,7 +279,7 @@ make stack  CROSS_COMPILE=aarch64-linux-gnu-
 |:---|:---|:---|
 | [`docs/C_rules_v3_addDO178C.md`](docs/C_rules_v3_addDO178C.md) | MISRA C:2012 + BARR-C:2018 + DO-178C | Authoritative coding rules enforced across the repository. |
 | [`docs/AD7490.PDF`](docs/AD7490.PDF) | Analog Devices Datasheet | Hardware specification for the AD7490 16-channel 12-bit SAR ADC. |
-| [`docs/LOW_LEVEL_REQUIREMENTS.md`](docs/LOW_LEVEL_REQUIREMENTS.md) | DO-178C §5.1, §11.8 | Specification of all 63 Low-Level Requirements (`LLR-QSPI-*`, `LLR-AD7490-*`). |
+| [`docs/LOW_LEVEL_REQUIREMENTS.md`](docs/LOW_LEVEL_REQUIREMENTS.md) | DO-178C §5.1, §11.8 | Specification of all 86 Low-Level Requirements (`LLR-QSPI-*`, `LLR-AD7490-*`). |
 | [`docs/SOFTWARE_DESIGN_DESCRIPTION.md`](docs/SOFTWARE_DESIGN_DESCRIPTION.md) | DO-178C §5.2, §11.9 | Software architecture, state machines, algorithms, WCET and WCSU bounds (`SDD-*`). |
 | [`docs/TRACEABILITY_MATRIX.md`](docs/TRACEABILITY_MATRIX.md) | DO-178C §5.5, Table A-5 | Complete bi-directional mapping between LLR, SDD, source code, and unit tests. |
 | [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) | DO-178C §6.4, §11.14 | Unit test results, fault-injection scenarios, and structural coverage report. |

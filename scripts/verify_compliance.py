@@ -30,6 +30,10 @@ PROD_FILES = [
     ROOT / "driver" / "ad7490_monitor.c",
 ]
 
+EXAMPLE_FILES = [
+    ROOT / "examples" / "ad7490_scan16_raw.c",
+]
+
 TEST_FILES = [
     ROOT / "test" / "test_common.h",
     ROOT / "test" / "test_common.c",
@@ -42,7 +46,7 @@ TEST_FILES = [
     ROOT / "test" / "test_monitor.c",
 ]
 
-ALL_CH_FILES = PROD_FILES + TEST_FILES
+ALL_CH_FILES = PROD_FILES + EXAMPLE_FILES + TEST_FILES
 
 VAGUE_RE = re.compile(
     r"(^|_)(value|val|data|tmp|buf|info|temp)($|_)", re.IGNORECASE
@@ -125,13 +129,21 @@ def check_file_style_and_naming(path: pathlib.Path, is_prod: bool) -> list[str]:
                     )
 
         if is_prod and path.suffix == ".c":
-            if not re.match(r"^\s*#\s*define", clean):
+            is_define = bool(re.match(r"^\s*#\s*define", clean))
+            is_enum_const = bool(
+                re.match(
+                    r"^\s*[A-Z][A-Z0-9_]*\s*=\s*"
+                    r"(?:0x[0-9a-fA-F]+|[0-9]+)(?:U|UL|L)?\s*,?\s*$",
+                    clean,
+                )
+            )
+            if not is_define and not is_enum_const:
                 for num in re.finditer(
                     r"\b([0-9]+(?:U|UL|L)?|0x[0-9a-fA-F]+(?:U|UL|L)?)\b",
                     clean,
                 ):
                     lit = num.group(0)
-                    if lit not in ("0", "1", "0U", "1U", "2U", "3U"):
+                    if lit not in ("0", "1", "0U", "1U"):
                         errors.append(
                             f"{rel}:{idx}: magic number '{lit}' in code"
                         )
@@ -237,15 +249,36 @@ def check_functions_and_signatures(
 
 def check_hamming_distances() -> list[str]:
     errors: list[str] = []
-    patterns = {
-        "AD7490_STATE_READY": 0x5A3C96E1,
-        "AD7490_STATE_SEQUENCING": 0x3CA5E196,
-        "AD7490_STATE_FAULT": 0xC35A693C,
-        "AD7490_MON_HEALTH_ACTIVE": 0x96E15A3C,
-        "AD7490_MON_HEALTH_FAILED": 0x691EA5C3,
-        "ZERO": 0x00000000,
-        "ONES": 0xFFFFFFFF,
-    }
+    expected_names = (
+        "AD7490_STATE_READY",
+        "AD7490_STATE_SEQUENCING",
+        "AD7490_STATE_FAULT",
+        "AD7490_MON_HEALTH_ACTIVE",
+        "AD7490_MON_HEALTH_FAILED",
+    )
+    patterns: dict[str, int] = {}
+    header_paths = (
+        ROOT / "driver" / "ad7490_driver.h",
+        ROOT / "driver" / "ad7490_monitor.h",
+    )
+    define_re = re.compile(
+        r"^\s*#\s*define\s+(AD7490_(?:STATE|MON_HEALTH)_[A-Z0-9_]+)"
+        r"\s+\(?(0x[0-9a-fA-F]+)U?\)?",
+        re.MULTILINE,
+    )
+    for h_path in header_paths:
+        if h_path.exists():
+            txt = h_path.read_text(encoding="utf-8")
+            for m in define_re.finditer(txt):
+                patterns[m.group(1)] = int(m.group(2), 16)
+
+    for name in expected_names:
+        if name not in patterns:
+            errors.append(f"Missing SEU state/health macro in headers: {name}")
+
+    patterns["ZERO"] = 0x00000000
+    patterns["ONES"] = 0xFFFFFFFF
+
     keys = list(patterns.keys())
     for i in range(len(keys)):
         for j in range(i + 1, len(keys)):
@@ -376,6 +409,12 @@ def main() -> int:
         else:
             all_errors.extend(check_file_style_and_naming(p, is_prod=True))
 
+    for p in EXAMPLE_FILES:
+        if not p.exists():
+            all_errors.append(f"Missing example file: {p}")
+        else:
+            all_errors.extend(check_file_style_and_naming(p, is_prod=True))
+
     for p in TEST_FILES:
         if not p.exists():
             all_errors.append(f"Missing test file: {p}")
@@ -391,6 +430,10 @@ def main() -> int:
         (
             ROOT / "driver" / "ad7490_monitor.h",
             ROOT / "driver" / "ad7490_monitor.c",
+        ),
+        (
+            ROOT / "examples" / "ad7490_scan16_raw.c",
+            ROOT / "examples" / "ad7490_scan16_raw.c",
         ),
     ]
     for h_path, c_path in pairs:
@@ -410,6 +453,7 @@ def main() -> int:
     print("================================================================")
     print("AD7490 COMPLIANCE & TRACEABILITY AUDIT: PASS (0 errors)")
     print(f"  - Production files verified : {len(PROD_FILES)}")
+    print(f"  - Example files verified    : {len(EXAMPLE_FILES)}")
     print(f"  - Test files verified       : {len(TEST_FILES)}")
     print("  - Rule 0 formatting         : PASS (<= 80 cols, Allman, no //)")
     print("  - Rule 2 naming             : PASS (3..31 chars, no vague stems)")
